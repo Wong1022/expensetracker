@@ -1,0 +1,3346 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>家庭與個人記帳工具</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./assets/icons/app-icon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="./assets/icons/app-icon-180.png">
+<meta name="theme-color" content="#28384A">
+<meta name="application-name" content="家庭資金">
+<meta name="apple-mobile-web-app-title" content="家庭資金">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<style>
+  /* 「帳本」主題：暖灰紙色底 + 每個資金分類各自的色標，仿實體帳本的彩色分隔頁籤 */
+  :root {
+    --bg: #EDEFE7; --surface: #FFFFFF; --ink: #23261F; --ink-muted: #5E6258;
+    --border: #DEE0D3; --field: #FBFBF8;
+    --personal: #2F6F62;  /* 個人：深青綠 */
+    --family: #C77B2C;    /* 家庭：暖琥珀 */
+    --credit: #A63D2F;    /* 信用卡：磚紅 */
+    --account: #33507A;   /* 銀行帳戶：靛藍 */
+    --neutral: #55584C;   /* 設定／備份：中性墨綠灰 */
+    --danger: #C23B2E;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1C1E18; --surface: #262922; --ink: #ECEEE4; --ink-muted: #A3A69A;
+      --border: #3A3D33; --field: #20221C;
+      --personal: #4FA08D;
+      --family: #E0983F;
+      --credit: #D2695A;
+      --account: #5D80B0;
+      --neutral: #9A9D8E;
+      --danger: #E2574A;
+    }
+    .alert-due { background: #4A3B16; color: #F3D77A; }
+    .alert-overdue { background: #4A211D; color: #FFB2A8; }
+    #toast .toast-msg { background: #ECEEE4; color: #1C1E18; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "PingFang TC", "Microsoft JhengHei", sans-serif;
+    background: var(--bg); color: var(--ink); padding-bottom: 86px; -webkit-font-smoothing: antialiased; overflow-x: hidden;
+  }
+  #app { padding: 14px; max-width: 480px; width: 100%; margin: 0 auto; overflow-x: hidden; }
+  .card {
+    background: var(--surface); border-radius: 14px; padding: 16px; margin-bottom: 12px;
+    box-shadow: 0 1px 3px rgba(35,38,31,.07); border-left: 4px solid var(--border);
+    max-width: 100%; overflow-x: hidden;
+  }
+  .section-title { margin: 18px 0 10px; }
+  .section-title:first-child { margin-top: 0; }
+  /* 頁面情境色：依目前分頁自動幫卡片、按鈕、輸入框焦點上色 */
+  .ctx-personal .card { border-left-color: var(--personal); }
+  .ctx-family .card { border-left-color: var(--family); }
+  .ctx-credit .card { border-left-color: var(--credit); }
+  .ctx-account .card { border-left-color: var(--account); }
+  .ctx-neutral .card { border-left-color: var(--neutral); }
+  .ctx-personal .btn-primary, .ctx-personal input:focus, .ctx-personal select:focus { border-color: var(--personal); }
+  .ctx-family .btn-primary, .ctx-family input:focus, .ctx-family select:focus { border-color: var(--family); }
+  .ctx-credit .btn-primary, .ctx-credit input:focus, .ctx-credit select:focus { border-color: var(--credit); }
+  .ctx-account .btn-primary, .ctx-account input:focus, .ctx-account select:focus { border-color: var(--account); }
+  .ctx-neutral .btn-primary, .ctx-neutral input:focus, .ctx-neutral select:focus { border-color: var(--neutral); }
+  .ctx-personal .btn-primary { background: var(--personal); }
+  .ctx-family .btn-primary { background: var(--family); }
+  .ctx-credit .btn-primary { background: var(--credit); }
+  .ctx-account .btn-primary { background: var(--account); }
+  .ctx-neutral .btn-primary { background: var(--neutral); }
+  /* 總覽頁混合多種分類，個別卡片手動指定色標，優先於頁面情境色 */
+  .card.tab-personal { border-left-color: var(--personal); }
+  .card.tab-family { border-left-color: var(--family); }
+  .card.tab-credit { border-left-color: var(--credit); }
+  .card.tab-account { border-left-color: var(--account); }
+
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 0; min-width: 0; }
+  .row > * { min-width: 0; }
+  .row > *:last-child { text-align: right; overflow-wrap: anywhere; }
+  .page-summary-row, .account-balance-row {
+    display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px;
+    align-items: start; padding: 7px 0;
+  }
+  .page-summary-row .big, .account-balance-row .big {
+    text-align: left; overflow-wrap: anywhere; line-height: 1.15;
+  }
+  .muted { color: var(--ink-muted); font-size: 12.5px; }
+  p { line-height: 1.5; overflow-wrap: anywhere; word-break: break-word; }
+  .label { color: var(--ink-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .07em; font-weight: 700; }
+  .big { font-size: clamp(22px, 7vw, 28px); font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 0; }
+  .neg { color: var(--danger); }
+  h2 { font-size: 15px; margin: 2px 0 12px; font-weight: 700; color: var(--ink); }
+  label { display: block; font-size: 12.5px; color: var(--ink-muted); font-weight: 600; margin-top: 10px; }
+  input, select, textarea {
+    width: 100%; padding: 10px; border: 1.5px solid var(--border); border-radius: 10px;
+    font-size: 16px; margin-top: 4px; background: var(--field); color: var(--ink);
+  }
+  input:focus, select:focus, textarea:focus { outline: none; }
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible {
+    outline: 3px solid color-mix(in srgb, currentColor 55%, transparent);
+    outline-offset: 2px;
+  }
+  input[type="checkbox"] { width: auto; margin: 0 6px 0 0; vertical-align: middle; }
+  .list-filter { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  .list-filter input[type="month"] { width: auto; margin-top: 0; }
+  .list-filter label { display: inline-flex; align-items: center; font-size: 13px; margin-top: 0; font-weight: 500; }
+  button { border: none; border-radius: 10px; padding: 11px 16px; font-size: 14.5px; font-weight: 600; cursor: pointer; }
+  .btn-primary { background: var(--ink); color: #fff; width: 100%; margin-top: 14px; }
+  .btn-danger { background: var(--danger); color: #fff; }
+  .btn-ghost { background: transparent; color: var(--ink-muted); padding: 4px 8px; text-decoration: underline; }
+  .btn-secondary {
+    background: var(--field); color: var(--ink); border: 1.5px solid var(--border);
+    padding: 9px 12px; margin-top: 10px;
+  }
+  .field-error { color: var(--danger); font-size: 12.5px; margin-top: 4px; font-weight: 700; }
+  .action-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .action-row .btn-danger { margin-left: auto; }
+  .just-saved { box-shadow: 0 0 0 3px color-mix(in srgb, var(--family) 30%, transparent); }
+  .compact-summary .row { margin: 6px 0; }
+  .status-note { border-left: 3px solid var(--family); padding-left: 10px; margin-top: 8px; }
+  .reimb-impact {
+    margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-left: 4px solid var(--family);
+    border-radius: 10px; background: var(--field);
+  }
+  .reimb-impact .row { align-items: flex-start; border-bottom: 1px solid var(--border); }
+  .reimb-impact .row:last-child { border-bottom: none; }
+  .reimb-quick-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .reimb-quick-row .btn-ghost { flex: 0 0 auto; min-height: 44px; }
+  .problem-item { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .problem-type { font-weight: 700; }
+  .problem-desc {
+    line-height: 1.45; max-width: calc(100vw - 76px);
+    white-space: normal; overflow-wrap: anywhere; word-break: break-word;
+  }
+  .problem-action { align-self: flex-start; }
+  .more-menu {
+    padding: 6px 12px;
+  }
+  .more-menu-item {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center;
+    width: 100%; padding: 14px 2px; border-radius: 0; border-bottom: 1px solid var(--border);
+    background: transparent; color: var(--ink); text-align: left; text-decoration: none;
+  }
+  .more-menu-item:last-child { border-bottom: none; }
+  .more-menu-title { display: block; font-size: 15px; font-weight: 700; }
+  .more-menu-desc { display: block; margin-top: 3px; color: var(--ink-muted); font-size: 12.5px; line-height: 1.35; }
+  .more-menu-arrow { color: var(--ink-muted); font-size: 18px; }
+  .more-back { margin: 0 0 12px; text-decoration: none; }
+  .metric-row {
+    display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px;
+    padding: 7px 0; overflow-wrap: anywhere;
+  }
+  .metric-row .metric-value { font-variant-numeric: tabular-nums; font-weight: 700; }
+  .metric-row .big { display: block; max-width: 100%; }
+  .report-filter { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+  .report-filter label { margin-top: 0; }
+  .report-filter .btn-ghost { min-height: 44px; white-space: nowrap; }
+  .report-section + .report-section { margin-top: 18px; }
+  .report-section-title { margin: 0 0 8px; font-size: 14px; }
+  .report-list { display: grid; gap: 10px; }
+  .report-item { min-width: 0; }
+  .report-item-head { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+  .report-item-head > * { min-width: 0; overflow-wrap: anywhere; }
+  .report-item-head > *:last-child { flex: 0 0 auto; text-align: right; font-variant-numeric: tabular-nums; }
+  .report-bar-track { width: 100%; min-width: 0; height: 10px; display: flex; overflow: hidden; border-radius: 999px; background: var(--border); }
+  .report-bar { height: 100%; min-width: 0; }
+  .report-bar-personal { background: var(--personal); }
+  .report-bar-family { background: var(--family); }
+  .report-legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 2px 0 12px; color: var(--ink-muted); font-size: 12.5px; }
+  .report-legend-item { display: inline-flex; align-items: center; gap: 5px; }
+  .report-legend-swatch { width: 11px; height: 11px; border-radius: 3px; }
+  .report-trend-list { display: grid; gap: 10px; }
+  .report-trend-row { display: grid; grid-template-columns: 58px minmax(48px, 1fr) auto; gap: 8px; align-items: center; min-width: 0; }
+  .report-trend-label { color: var(--ink-muted); font-size: 12.5px; white-space: nowrap; }
+  .report-trend-value { font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
+  .test-mode-banner {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+    line-height: 1.45; overflow-wrap: anywhere;
+  }
+  .test-mode-banner .btn-ghost { margin: 0; color: inherit; background: rgba(255,255,255,.45); text-decoration: none; }
+  ul.list { list-style: none; margin: 0; padding: 0; }
+  ul.list li { border-bottom: 1px solid var(--border); padding: 9px 0; }
+  ul.list li:last-child { border-bottom: none; }
+  details.tucked { margin-top: 4px; }
+  details.tucked summary {
+    cursor: pointer; font-size: 14px; font-weight: 700; color: var(--ink-muted);
+    padding: 6px 0; list-style: none;
+  }
+  details.tucked summary::-webkit-details-marker { display: none; }
+  details.tucked summary::before { content: '▸ '; }
+  details.tucked[open] summary::before { content: '▾ '; }
+  details.tucked .card { margin-top: 8px; }
+  #modal {
+    position: fixed; inset: 0; background: rgba(35,38,31,.45);
+    display: none; align-items: flex-end; justify-content: center; z-index: 50;
+  }
+  #modal .sheet {
+    background: var(--surface); width: 100%; max-width: 480px;
+    border-radius: 16px 16px 0 0; padding: 18px 16px 24px;
+    max-height: 88vh; overflow-y: auto;
+  }
+  #modal .sheet h2 { margin-top: 0; }
+  #modal .modal-close {
+    background: transparent; color: var(--ink-muted); float: right;
+    width: 44px; height: 44px; padding: 0; font-size: 20px;
+  }
+  #toast {
+    position: fixed; bottom: 84px; left: 0; right: 0;
+    display: flex; justify-content: center; z-index: 60; pointer-events: none;
+  }
+  #toast .toast-msg {
+    background: var(--ink); color: #fff; padding: 10px 18px;
+    border-radius: 999px; font-size: 14px; opacity: 0;
+    transition: opacity .25s; box-shadow: 0 2px 8px rgba(0,0,0,.2);
+  }
+  #toast .toast-msg.show { opacity: .95; }
+  @media (prefers-color-scheme: dark) {
+    #toast .toast-msg { background: #ECEEE4; color: #1C1E18; }
+  }
+  .alert-due {
+    background: #FFF4D6; color: #8A6D00; border-radius: 8px;
+    padding: 8px 10px; font-size: 13px; margin: 6px 0;
+  }
+  .alert-overdue {
+    background: #FBE0DC; color: #A6231A; border-radius: 8px;
+    padding: 8px 10px; font-size: 13px; font-weight: 700; margin: 6px 0;
+  }
+  @media (prefers-color-scheme: dark) {
+    .alert-due { background: #4A3B16; color: #F3D77A; }
+    .alert-overdue { background: #4A211D; color: #FFB2A8; }
+  }
+  #tabbar {
+    position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
+    width: 100%; max-width: 480px; display: flex;
+    background: var(--surface); border-top: 1px solid var(--border);
+  }
+  #tabbar button {
+    flex: 1 1 0; min-width: 0; background: none; border-radius: 0; padding: 12px 1px;
+    min-height: 44px; font-size: 12px; color: var(--ink-muted); font-weight: 600; white-space: nowrap;
+  }
+  #tabbar button.active.tab-personal { color: var(--personal); }
+  #tabbar button.active.tab-family { color: var(--family); }
+  #tabbar button.active.tab-credit { color: var(--credit); }
+  #tabbar button.active.tab-account { color: var(--account); }
+  #tabbar button.active.tab-neutral { color: var(--neutral); }
+
+  /* 批次 P1：家庭資金捷運圖。保留既有語意色，新增 App 級視覺角色。 */
+  :root {
+    --metro-bg: #F1F4EF;
+    --metro-ink: #28384A;
+    --metro-sky: #83A7C5;
+    --metro-mint: #7BA68F;
+    --metro-sand: #D8BD78;
+    --metro-clay: #D58679;
+    --metro-paper: #FBFCF8;
+    --metro-line: #314354;
+    --metro-soft-line: #C9D1C9;
+    --metro-shadow: 4px 5px 0 rgba(40, 56, 74, .14);
+    --metro-nav-height: 72px;
+    --account: #668EAE;
+    --family: #668F78;
+    --credit: #B7665C;
+    --personal: #7B7561;
+    --neutral: #526376;
+  }
+  body {
+    background-color: var(--metro-bg);
+    background-image:
+      linear-gradient(rgba(40,56,74,.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(40,56,74,.025) 1px, transparent 1px);
+    background-size: 24px 24px;
+    padding-bottom: calc(var(--metro-nav-height) + env(safe-area-inset-bottom, 0px) + 22px);
+  }
+  #app { padding: 12px 14px 20px; }
+  .icon {
+    width: 22px; height: 22px; display: inline-block; flex: 0 0 auto;
+    fill: none; stroke: currentColor; stroke-width: 1.9;
+    stroke-linecap: round; stroke-linejoin: round; vertical-align: middle;
+  }
+  .app-topbar {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    margin-bottom: 12px; min-height: 48px;
+  }
+  @media (display-mode: standalone) {
+    .app-topbar { padding-top: env(safe-area-inset-top, 0px); }
+  }
+  .app-identity { display: flex; align-items: center; gap: 9px; min-width: 0; }
+  .app-mark {
+    width: 36px; height: 36px; display: grid; place-items: center; flex: 0 0 auto;
+    border: 2px solid var(--metro-line); border-radius: 11px 11px 11px 4px;
+    background: var(--metro-sand); color: var(--metro-ink); box-shadow: 2px 2px 0 var(--metro-line);
+  }
+  .app-mark .icon { width: 20px; height: 20px; }
+  .app-name { font: 800 15px/1.1 Bahnschrift, "PingFang TC", "Microsoft JhengHei", sans-serif; letter-spacing: .03em; }
+  .app-kicker { color: var(--ink-muted); font-size: 11px; margin-top: 3px; }
+  #app > h2:first-of-type, #app > .row:first-of-type h2 {
+    position: relative; margin-top: 8px; padding-left: 17px; font-size: 22px; line-height: 1.2;
+  }
+  #app > h2:first-of-type::before, #app > .row:first-of-type h2::before {
+    content: ""; position: absolute; left: 0; top: 2px; bottom: 2px; width: 7px;
+    border: 1.5px solid var(--metro-line); border-radius: 6px 6px 6px 2px;
+    background: var(--metro-sand);
+  }
+  #app.ctx-personal > .row:first-of-type h2::before { background: var(--metro-sand); }
+  #app.ctx-family > h2:first-of-type::before { background: var(--metro-mint); }
+  #app.ctx-credit > h2:first-of-type::before { background: var(--metro-clay); }
+  #app.ctx-account > h2:first-of-type::before { background: var(--metro-sky); }
+  .privacy-toggle {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    min-width: 44px; min-height: 44px; padding: 8px 10px; margin: 0;
+    border: 1.5px solid var(--metro-soft-line); border-radius: 999px;
+    background: rgba(251,252,248,.78); color: var(--metro-ink); text-decoration: none;
+  }
+  .privacy-toggle .icon { width: 18px; height: 18px; }
+  h2, .section-title { font-family: Bahnschrift, "PingFang TC", "Microsoft JhengHei", sans-serif; letter-spacing: .015em; }
+  .big, .metric-value, .report-trend-value { font-family: Bahnschrift, ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  .card {
+    background: rgba(251,252,248,.94); border: 1.5px solid var(--metro-soft-line);
+    border-left: 1.5px solid var(--metro-soft-line); border-radius: 16px 16px 16px 7px;
+    box-shadow: 2px 3px 0 rgba(40,56,74,.08); padding: 16px; margin-bottom: 14px;
+  }
+  .ctx-personal .card, .ctx-family .card, .ctx-credit .card,
+  .ctx-account .card, .ctx-neutral .card { border-left-color: var(--metro-soft-line); }
+  .ctx-personal > .card:not(.metro-station) { border-top: 3px solid var(--personal); }
+  .ctx-family > .card:not(.metro-station) { border-top: 3px solid var(--metro-mint); }
+  .ctx-credit > .card:not(.metro-station) { border-top: 3px solid var(--metro-clay); }
+  .ctx-account > .card:not(.metro-station) { border-top: 3px solid var(--metro-sky); }
+  .ctx-neutral > .card:not(.metro-station) { border-top: 3px solid #9AA9A0; }
+  input, select, textarea {
+    border: 1.5px solid #B9C3BC; border-radius: 10px 10px 10px 4px;
+    background: rgba(255,255,255,.72); min-height: 44px;
+  }
+  button { min-height: 44px; transition: transform .16s ease, box-shadow .16s ease, background-color .16s ease; }
+  button:active { transform: translateY(1px); }
+  .btn-primary {
+    border: 2px solid var(--metro-line); border-radius: 12px 12px 12px 5px;
+    box-shadow: 2px 3px 0 var(--metro-line); background: var(--metro-ink); color: #fff;
+  }
+  .ctx-personal .btn-primary { background: var(--metro-ink); border-color: var(--metro-line); }
+  .ctx-family .btn-primary { background: #587D69; border-color: var(--metro-line); }
+  .ctx-credit .btn-primary { background: #A95F57; border-color: var(--metro-line); }
+  .ctx-account .btn-primary { background: #5E83A2; border-color: var(--metro-line); }
+  .ctx-neutral .btn-primary { background: var(--metro-ink); border-color: var(--metro-line); }
+  .btn-secondary { border-radius: 10px 10px 10px 4px; }
+  .btn-ghost { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
+  .alert-due, .alert-overdue {
+    border: 1.5px solid currentColor; border-radius: 11px 11px 11px 4px;
+    box-shadow: none; font-weight: 650;
+  }
+  .backup-ticket {
+    display: grid; grid-template-columns: auto minmax(0,1fr); gap: 10px 12px;
+    align-items: start; margin-bottom: 14px; padding: 12px 13px;
+    color: #5E5741; background: #F2EBD7; border: 1.5px dashed #A99765;
+    border-radius: 12px 12px 12px 4px; font-size: 12.5px;
+  }
+  .backup-ticket > .icon { margin-top: 2px; color: #776A45; }
+  .backup-ticket .action-row { grid-column: 2; margin: 0; gap: 6px; }
+  .backup-ticket .btn-primary, .backup-ticket .btn-ghost {
+    width: auto; min-height: 44px; margin: 0; padding: 7px 10px; box-shadow: none;
+    border: 1px solid #A99765; background: transparent; color: #5E5741; text-decoration: none;
+  }
+  .overview-hero {
+    position: relative; isolation: isolate; overflow: hidden;
+    padding: 20px 18px 18px; margin-bottom: 17px; color: #F7F8F4;
+    background: var(--metro-ink); border: 2px solid #1D2B39;
+    border-radius: 22px 22px 22px 8px; box-shadow: var(--metro-shadow);
+  }
+  .overview-hero::before, .overview-hero::after {
+    content: ""; position: absolute; z-index: -1; right: -28px; width: 145px; height: 12px;
+    border: 2px solid rgba(255,255,255,.28); border-left: 0; border-radius: 0 999px 999px 0;
+    transform: rotate(-16deg);
+  }
+  .overview-hero::before { top: 30px; background: rgba(131,167,197,.32); }
+  .overview-hero::after { top: 55px; background: rgba(216,189,120,.28); }
+  .hero-kicker { margin: 0 0 8px; font-size: 11px; font-weight: 750; letter-spacing: .12em; color: #D6E0E2; }
+  .hero-title { margin: 0; max-width: 285px; font: 800 clamp(21px,6.5vw,30px)/1.08 Bahnschrift,"PingFang TC",sans-serif; }
+  .hero-summary { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 14px; align-items: end; margin-top: 18px; }
+  .hero-amount { margin-top: 4px; font-size: clamp(27px,8vw,36px); color: #fff; }
+  .hero-secondary { font-size: 12px; color: #D6E0E2; text-align: right; }
+  .hero-secondary strong { display: block; margin-top: 4px; color: #fff; font-size: 15px; font-variant-numeric: tabular-nums; }
+  .quick-add {
+    display: flex; align-items: center; justify-content: center; gap: 9px;
+    margin-top: 16px; background: var(--metro-sand) !important; color: var(--metro-ink) !important;
+    border-color: #1D2B39 !important; font-weight: 800;
+  }
+  .quick-add .icon { width: 20px; height: 20px; }
+  .money-map { position: relative; padding: 2px 0 1px; }
+  .money-map-title { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin: 7px 2px 12px; }
+  .money-map-title h2 { margin: 0; font-size: 17px; }
+  .route-rails {
+    position: absolute; top: 47px; bottom: 22px; left: 23px; width: 17px;
+    border-left: 4px solid var(--metro-sky); border-right: 4px solid var(--metro-mint);
+    opacity: .85; pointer-events: none;
+  }
+  .route-rails::after { content: ""; position: absolute; inset: 0 3px; border-left: 3px solid var(--metro-clay); }
+  .metro-station {
+    position: relative; margin-left: 45px; overflow: visible;
+    border: 2px solid var(--metro-line) !important; box-shadow: 3px 4px 0 var(--metro-line);
+  }
+  .metro-station::before {
+    content: ""; position: absolute; left: -37px; top: 23px; width: 24px; height: 24px;
+    border-radius: 50%; border: 4px solid var(--metro-bg); box-shadow: 0 0 0 2px var(--metro-line);
+    background: var(--station-color, var(--metro-sand));
+  }
+  .metro-station::after {
+    content: ""; position: absolute; left: -16px; top: 33px; width: 16px;
+    border-top: 3px solid var(--metro-line);
+  }
+  .station-personal { --station-color: var(--metro-sand); background: #F2EBD7; }
+  .station-account { --station-color: var(--metro-sky); background: #E3EDF0; }
+  .station-family { --station-color: var(--metro-mint); background: #E3ECE5; }
+  .station-credit { --station-color: var(--metro-clay); background: #F2E2DE; }
+  .station-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
+  .station-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .station-heading .icon { width: 20px; height: 20px; }
+  .station-heading h2 { margin: 0; font-size: 15px; }
+  .station-link { flex: 0 0 auto; padding: 5px 4px; color: var(--metro-ink); font-size: 12px; }
+  .station-account .metric-row, .station-family .metric-row { border-top: 1px dashed rgba(40,56,74,.22); }
+  .station-account .metric-row:first-of-type, .station-family .metric-row:first-of-type { border-top: 0; }
+  .station-credit .alert-due, .station-credit .alert-overdue { margin-top: 10px; background: rgba(255,255,255,.48); }
+  .more-menu { padding: 7px 12px; }
+  .more-menu-item { grid-template-columns: 42px minmax(0,1fr) auto; gap: 11px; min-height: 68px; }
+  .more-menu-icon {
+    width: 40px; height: 40px; display: grid; place-items: center;
+    border: 1.5px solid var(--metro-line); border-radius: 12px 12px 12px 4px;
+    background: #E6ECE6; color: var(--metro-ink); box-shadow: 2px 2px 0 rgba(40,56,74,.15);
+  }
+  .more-menu-item.tab-credit .more-menu-icon { background: #F2E2DE; color: #8F514B; }
+  .more-menu-item.tab-account .more-menu-icon { background: #E3EDF0; color: #527793; }
+  .more-menu-arrow { font-family: Bahnschrift, sans-serif; }
+  #modal { background: rgba(29,43,57,.55); backdrop-filter: blur(2px); }
+  #modal .sheet { border: 2px solid var(--metro-line); border-bottom: 0; border-radius: 22px 22px 0 0; box-shadow: 0 -5px 0 rgba(40,56,74,.12); }
+  #tabbar {
+    min-height: calc(var(--metro-nav-height) + env(safe-area-inset-bottom, 0px));
+    padding: 7px 8px env(safe-area-inset-bottom, 0px); gap: 4px;
+    background: rgba(251,252,248,.96); border: 2px solid var(--metro-line); border-bottom: 0;
+    border-radius: 18px 18px 0 0; box-shadow: 0 -4px 0 rgba(40,56,74,.1); z-index: 40;
+  }
+  #tabbar button {
+    position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    min-height: 56px; padding: 5px 2px; border: 1.5px solid transparent; border-radius: 12px 12px 12px 5px;
+    color: #68737B; font-size: 11px;
+  }
+  #tabbar button .icon { width: 21px; height: 21px; }
+  #tabbar button.active {
+    border-color: var(--metro-line); background: #E7ECE5; color: var(--metro-ink) !important;
+    box-shadow: 2px 2px 0 var(--metro-line); transform: translateY(-3px); font-weight: 800;
+  }
+  #tabbar button.active.tab-personal { background: #EEE8D7; }
+  #tabbar button.active.tab-family { background: #DDE9DF; }
+  #tabbar button::after { content: ""; width: 16px; height: 3px; border-radius: 999px; background: transparent; }
+  #tabbar button.active::after { background: currentColor; }
+  @media (max-width: 380px) {
+    #app { padding-left: 11px; padding-right: 11px; }
+    .metro-station { margin-left: 39px; padding: 14px 12px; }
+    .metro-station::before { left: -34px; }
+    .route-rails { left: 19px; }
+    .station-head { gap: 5px; }
+    .station-link { font-size: 11.5px; }
+    .hero-summary { grid-template-columns: 1fr; gap: 8px; }
+    .hero-secondary { text-align: left; }
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --metro-bg: #19221F; --metro-ink: #DCE7E4; --metro-paper: #242F2B;
+      --metro-line: #A9BBB7; --metro-soft-line: #485953;
+      --surface: #242F2B; --field: #1F2925; --ink: #EDF2EF; --ink-muted: #B3C0BB; --border: #485953;
+    }
+    body { background-color: var(--metro-bg); background-image: linear-gradient(rgba(220,231,228,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(220,231,228,.025) 1px,transparent 1px); }
+    .app-mark { color: #1E2D2A; border-color: #A9BBB7; box-shadow: 2px 2px 0 #A9BBB7; }
+    .privacy-toggle, #tabbar { background: rgba(36,47,43,.97); color: var(--ink); }
+    .card { background: rgba(36,47,43,.95); box-shadow: 2px 3px 0 rgba(0,0,0,.2); }
+    input, select, textarea { background: #1F2925; border-color: #52635D; }
+    .overview-hero { color: #F4F6F3; background: #304357; border-color: #A9BBB7; box-shadow: 4px 5px 0 rgba(0,0,0,.25); }
+    .hero-kicker, .hero-secondary { color: #CBD8D5; }
+    .station-personal { background: #3A392F; }
+    .station-account { background: #293A43; }
+    .station-family { background: #2C3D34; }
+    .station-credit { background: #432F30; }
+    .metro-station { border-color: #A9BBB7 !important; box-shadow: 3px 4px 0 #101816; }
+    .metro-station::before { border-color: var(--metro-bg); box-shadow: 0 0 0 2px #A9BBB7; }
+    .metro-station::after { border-color: #A9BBB7; }
+    .backup-ticket { color: #DDD3B6; background: #37352C; border-color: #8D8263; }
+    .backup-ticket .btn-primary, .backup-ticket .btn-ghost { color: #E9DFC1; border-color: #8D8263; }
+    .more-menu-icon { background: #303B37; border-color: #A9BBB7; color: #DCE7E4; }
+    .more-menu-item.tab-credit .more-menu-icon { background: #432F30; color: #E3AAA3; }
+    .more-menu-item.tab-account .more-menu-icon { background: #293A43; color: #ACCCE2; }
+    #tabbar button { color: #B4C0BC; }
+    #tabbar button.active, #tabbar button.active.tab-personal, #tabbar button.active.tab-family { background: #35443E; box-shadow: 2px 2px 0 #A9BBB7; }
+    .station-credit .alert-due, .station-credit .alert-overdue { background: rgba(0,0,0,.16); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+    #tabbar button.active { transform: none; }
+  }
+</style>
+</head>
+<body>
+  <main id="app"></main>
+  <nav id="tabbar"></nav>
+  <div id="modal" style="display:none"></div>
+  <div id="toast"></div>
+<script>
+// ===================== 1. 資料層 =====================
+const STORAGE_KEY = 'familyBudgetTracker';
+const SCHEMA_VERSION = 1;
+const BACKUP_REMINDER_DAYS = 14;
+const BACKUP_REMINDER_SNOOZE_DAYS = 3;
+let stateBlocked = false; // 偵測到不相容/損毀資料時鎖定寫入，避免覆蓋原始資料
+
+function defaultState() {
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    updatedAt: null,
+    lastBackupAt: null,
+    backupReminderSnoozedUntil: null,
+    data: {
+      transactions: [],
+      familyFundDeposits: [],
+      familyFundReimbursements: [],
+      creditCards: [],
+      creditCardPayments: [],
+      bankAccounts: [],
+      accountManualMovements: [],
+      banks: [],
+      categoryKeywords: [
+        { category: '餐飲', keywords: ['早餐','午餐','晚餐','麥當勞','超商','7-11','全家','咖啡','餐廳'] },
+        { category: '交通', keywords: ['加油','悠遊卡','捷運','公車','計程車','uber','停車'] },
+        { category: '購物', keywords: ['蝦皮','momo','pchome','網購','買'] },
+        { category: '娛樂', keywords: ['電影','遊戲','訂閱','netflix'] },
+        { category: '醫療', keywords: ['藥局','診所','醫院','看醫生'] }
+      ].map(c => Object.assign({}, c, { id: genId(), createdAt: nowIso(), updatedAt: nowIso() })),
+      templates: { personal: [], family: [] },
+      monthlyReconciliation: [],
+      settings: { privacyModeAutoHide: false }
+    }
+  };
+}
+
+let storageAvailable = true; // localStorage 本身是否可用；部分手機瀏覽器用 file:// 協定打開本機檔案時會封鎖 localStorage
+let storageWarningShown = false; // 避免每次存檔失敗都彈一次 alert
+
+// 合法的信用卡帳務狀態（統一常數，程式各處與驗證都以此為準）
+const CARD_STATUSES = ['未結帳', '已出帳', '不列入計算'];
+const FAMILY_CATEGORIES = ['房租', '水電網路瓦斯', '家用', '旅遊基金', '急用'];
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const YM_RE = /^\d{4}-\d{2}$/;
+
+// 把舊版本用過的 cardStatus 值遷移成現行值。
+function migrateCardStatus(status) {
+  if (status === '不計入本期') return '不列入計算';
+  if (status === '已繳款') return '已出帳';
+  return status;
+}
+
+// 嚴格檢查日期字串：不只格式，還要是真的存在的日期。
+function isValidDateString(s) {
+  if (typeof s !== 'string' || !DATE_RE.test(s)) return false;
+  const [y, m, d] = s.split('-').map(Number);
+  if (m < 1 || m > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(y, m - 1, d);
+  return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
+}
+
+// 嚴格檢查帳單月份字串（YYYY-MM），月份要 1-12。
+function isValidYearMonth(s) {
+  if (typeof s !== 'string' || !YM_RE.test(s)) return false;
+  const mm = Number(s.slice(5, 7));
+  return mm >= 1 && mm <= 12;
+}
+
+// 深度驗證＋遷移。loadState 與 handleImport 共用（A3/A4 接上）。
+// 注意：本函式先深拷貝傳入資料，只改動並回傳拷貝，不動呼叫端原物件。
+function deepValidateAndMigrate(parsed) {
+  const fail = (msg) => ({ error: msg, state: null });
+  if (!parsed || typeof parsed !== 'object') return fail('不是有效的資料物件。');
+
+  let work;
+  try {
+    work = JSON.parse(JSON.stringify(parsed));
+  } catch (e) {
+    return fail('資料無法解析（可能含有無法序列化的內容）。');
+  }
+
+  if (work.schemaVersion !== SCHEMA_VERSION) {
+    return fail('資料版本（' + work.schemaVersion + '）跟目前程式版本（' + SCHEMA_VERSION + '）不相容。');
+  }
+  const normalizeReminderDate = value => (
+    typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null
+  );
+  work.lastBackupAt = normalizeReminderDate(work.lastBackupAt);
+  work.backupReminderSnoozedUntil = normalizeReminderDate(work.backupReminderSnoozedUntil);
+  const data = work.data;
+  if (!data || typeof data !== 'object') return fail('缺少 data 區塊。');
+
+  const arrayKeys = [
+    'transactions', 'familyFundDeposits', 'familyFundReimbursements',
+    'creditCards', 'creditCardPayments', 'bankAccounts', 'accountManualMovements',
+    'banks', 'categoryKeywords', 'monthlyReconciliation'
+  ];
+  for (const k of arrayKeys) {
+    if (!Array.isArray(data[k])) return fail('欄位 data.' + k + ' 應該是陣列。');
+  }
+  if (!data.templates || !Array.isArray(data.templates.personal) || !Array.isArray(data.templates.family)) {
+    return fail('欄位 data.templates 格式錯誤。');
+  }
+  if (!data.settings || typeof data.settings !== 'object') {
+    return fail('欄位 data.settings 格式錯誤。');
+  }
+  data.settings.privacyModeAutoHide = data.settings.privacyModeAutoHide === true;
+
+  const idCollections = arrayKeys.map(k => data[k]).concat([data.templates.personal, data.templates.family]);
+  for (const coll of idCollections) {
+    for (const rec of coll) {
+      if (!rec || typeof rec !== 'object') return fail('有一筆不是有效物件的記錄。');
+      if (rec.id === undefined || rec.id === null) {
+        rec.id = genId();
+      } else if (!isValidId(rec.id)) {
+        return fail('有一筆記錄的 id 格式不正確，資料可能已損毀或被竄改。');
+      }
+    }
+  }
+
+  const accountIds = new Set(data.bankAccounts.map(a => a.id));
+  const cardIds = new Set(data.creditCards.map(c => c.id));
+  const badAmount = (rec) => !(Number.isInteger(rec.amount) && rec.amount > 0);
+  const badDate = (rec) => !isValidDateString(rec.date);
+
+  for (const t of data.transactions) {
+    if (badAmount(t)) return fail('有一筆交易的金額不是正整數。');
+    if (badDate(t)) return fail('有一筆交易的日期格式不正確（應為 YYYY-MM-DD）。');
+    if (t.scope !== 'personal' && t.scope !== 'family') return fail('有一筆交易的類型（scope）不正確。');
+    if (t.scope === 'family') {
+      if (!t.category || t.category === '對帳調整') t.category = '家用';
+      if (FAMILY_CATEGORIES.indexOf(t.category) === -1) return fail('有一筆家庭交易的類別不正確。');
+    }
+    if (t.paymentMethod !== 'cash' && t.paymentMethod !== 'bankAccount' && t.paymentMethod !== 'creditCard') {
+      return fail('有一筆交易的支付方式不正確。');
+    }
+    if (t.paymentMethod === 'bankAccount' && !accountIds.has(t.accountId)) {
+      return fail('有一筆交易指向不存在的銀行帳戶。');
+    }
+    if (t.paymentMethod === 'creditCard') {
+      if (!cardIds.has(t.cardId)) return fail('有一筆交易指向不存在的信用卡。');
+      t.cardStatus = migrateCardStatus(t.cardStatus);
+      if (CARD_STATUSES.indexOf(t.cardStatus) === -1) return fail('有一筆信用卡交易的帳務狀態不正確。');
+      if (!isValidYearMonth(t.billingMonth)) return fail('有一筆信用卡交易的帳單月份格式不正確。');
+    }
+  }
+
+  for (const d of data.familyFundDeposits) {
+    if (badAmount(d)) return fail('有一筆家庭基金存入的金額不是正整數。');
+    if (badDate(d)) return fail('有一筆家庭基金存入的日期格式不正確。');
+    if (!d.depositedBy) return fail('有一筆家庭基金存入缺少存入人。');
+    if (!d.category) d.category = '家用';
+    if (FAMILY_CATEGORIES.indexOf(d.category) === -1) return fail('有一筆家庭基金存入的類別不正確。');
+    if (d.fromAccountId != null && !accountIds.has(d.fromAccountId)) return fail('有一筆家庭基金存入指向不存在的帳戶。');
+  }
+
+  for (const r of data.familyFundReimbursements) {
+    if (badAmount(r)) return fail('有一筆補款的金額不是正整數。');
+    if (badDate(r)) return fail('有一筆補款的日期格式不正確。');
+    if (!r.category) r.category = '家用';
+    if (FAMILY_CATEGORIES.indexOf(r.category) === -1) return fail('有一筆補款的類別不正確。');
+    if (r.method == null) r.method = 'bankAccount';
+    if (r.method !== 'cash' && r.method !== 'bankAccount') return fail('有一筆補款的方式不正確。');
+    if (r.cardId === undefined) r.cardId = null;
+    if (r.method === 'cash') r.toAccountId = null;
+    if (r.method === 'bankAccount' && !accountIds.has(r.toAccountId)) return fail('有一筆補款指向不存在的帳戶。');
+    if (r.cardId != null && (!isValidId(r.cardId) || !cardIds.has(r.cardId))) return fail('有一筆補款關聯到不存在的信用卡。');
+  }
+
+  for (const p of data.creditCardPayments) {
+    if (badAmount(p)) return fail('有一筆信用卡還款的金額不是正整數。');
+    if (badDate(p)) return fail('有一筆信用卡還款的日期格式不正確。');
+    if (!cardIds.has(p.cardId)) return fail('有一筆信用卡還款指向不存在的信用卡。');
+    if (p.fromAccountId != null && !accountIds.has(p.fromAccountId)) return fail('有一筆信用卡還款指向不存在的帳戶。');
+  }
+
+  for (const m of data.accountManualMovements) {
+    if (badAmount(m)) return fail('有一筆帳戶異動的金額不是正整數。');
+    if (badDate(m)) return fail('有一筆帳戶異動的日期格式不正確。');
+    if (!accountIds.has(m.accountId)) return fail('有一筆帳戶異動指向不存在的帳戶。');
+    if (m.direction !== '存入' && m.direction !== '提出') return fail('有一筆帳戶異動的方向不正確。');
+  }
+
+  for (const c of data.creditCards) {
+    if (!Number.isInteger(c.creditLimit) || c.creditLimit <= 0) return fail('有一張信用卡的額度不正確。');
+    if (!Number.isInteger(c.statementDay) || c.statementDay < 1 || c.statementDay > 31) return fail('有一張信用卡的結帳日不正確。');
+    if (!Number.isInteger(c.dueDay) || c.dueDay < 1 || c.dueDay > 31) return fail('有一張信用卡的繳款日不正確。');
+    if (!Array.isArray(c.installments)) c.installments = [];
+    for (const inst of c.installments) {
+      if (!inst || typeof inst !== 'object') return fail('有一筆分期資料不是有效物件。');
+      if (inst.id === undefined || inst.id === null) {
+        inst.id = genId();
+      } else if (!isValidId(inst.id)) {
+        return fail('有一筆分期的 id 格式不正確，資料可能已損毀或被竄改。');
+      }
+      if (!Number.isInteger(inst.totalAmount) || inst.totalAmount <= 0) return fail('有一筆分期的總額不是正整數。');
+      if (!Number.isInteger(inst.perInstallment) || inst.perInstallment <= 0) return fail('有一筆分期的每期金額不是正整數。');
+      if (!Number.isInteger(inst.totalPeriods) || inst.totalPeriods <= 0) return fail('有一筆分期的總期數不是正整數。');
+      if (!Number.isInteger(inst.paidPeriods) || inst.paidPeriods < 0 || inst.paidPeriods > inst.totalPeriods) {
+        return fail('有一筆分期的已還期數不正確。');
+      }
+    }
+  }
+
+  for (const a of data.bankAccounts) {
+    if (!Number.isInteger(a.openingBalance)) return fail('有一個帳戶的期初餘額不是整數。');
+    if (!a.name) return fail('有一個帳戶缺少名稱。');
+  }
+
+  const validReconciliationModules = ['creditCard', 'familyFund', 'bankAccount'];
+  for (const r of data.monthlyReconciliation) {
+    if (badDate(r)) return fail('有一筆對帳紀錄的日期格式不正確。');
+    if (validReconciliationModules.indexOf(r.module) === -1) return fail('有一筆對帳紀錄的 module 不正確。');
+    if (r.module === 'bankAccount' && !accountIds.has(r.refId)) return fail('有一筆對帳紀錄指向不存在的銀行帳戶。');
+    if (r.module === 'creditCard' && !cardIds.has(r.refId)) return fail('有一筆對帳紀錄指向不存在的信用卡。');
+    if (r.module === 'familyFund') {
+      if (r.refId == null) r.refId = '家用';
+      if (FAMILY_CATEGORIES.indexOf(r.refId) === -1) return fail('家庭基金對帳紀錄的 refId 必須是有效類別。');
+    }
+    if (!Number.isInteger(r.recordedBalance) || !Number.isInteger(r.actualBalance) || !Number.isInteger(r.diff)) {
+      return fail('有一筆對帳紀錄的金額不是整數。');
+    }
+    if (r.diff !== r.actualBalance - r.recordedBalance) return fail('有一筆對帳紀錄的差額計算不一致。');
+    if (r.adjustmentRecordId != null && !isValidId(r.adjustmentRecordId)) return fail('有一筆對帳紀錄的調整記錄 id 格式不正確。');
+  }
+
+  // categoryKeywords 的內容驗證（Phase 1 就會被 suggestCategory 用到，keywords 一定要是字串陣列，否則之後會炸）
+  for (const c of data.categoryKeywords) {
+    if (typeof c.category !== 'string' || !c.category) return fail('有一個分類缺少名稱。');
+    if (!Array.isArray(c.keywords) || !c.keywords.every(k => typeof k === 'string')) return fail('有一個分類的關鍵字格式不正確（應為字串陣列）。');
+  }
+
+  return { error: null, state: work };
+}
+
+function loadState() {
+  let raw = null;
+  try {
+    raw = localStorage.getItem(STORAGE_KEY);
+  } catch (e) {
+    storageAvailable = false;
+    return defaultState();
+  }
+  if (!raw) return defaultState();
+  try {
+    const parsed = JSON.parse(raw);
+    const result = deepValidateAndMigrate(parsed);
+    if (result.error) {
+      stateBlocked = true;
+      alert('偵測到本機資料有問題（' + result.error + '）。為了避免覆蓋你原本存在手機裡的資料，所有新增/修改/刪除功能已暫時鎖定，請到「備份」頁做救援匯出，或匯入正確版本的備份檔來還原。');
+      return defaultState();
+    }
+    return result.state;
+  } catch (e) {
+    stateBlocked = true;
+    alert('讀取本機資料失敗（資料可能損毀）。為了避免覆蓋你原本存在手機裡的資料，所有新增/修改/刪除功能已暫時鎖定，請到「備份」頁做救援匯出，或匯入備份檔來還原。');
+    return defaultState();
+  }
+}
+
+let state = loadState();
+const PRIVACY_MASK = 'NT$••••';
+let privacyAmountsHidden = state.data.settings.privacyModeAutoHide === true;
+
+function saveState() {
+  if (stateBlocked) {
+    alert('目前處於鎖定狀態（本機資料版本不相容或已損毀），無法儲存。請先到「備份」頁匯入正確的備份檔。');
+    return;
+  }
+  state.updatedAt = nowIso();
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (e) {
+    storageAvailable = false;
+    if (!storageWarningShown) {
+      storageWarningShown = true;
+      alert('儲存失敗（可能是裝置儲存空間已滿，或瀏覽器封鎖了本機儲存功能）。剛剛的修改暫時只存在畫面上，離開頁面就會遺失。請立刻到「備份」頁匯出 JSON 備份保住資料，並檢查瀏覽器儲存空間。');
+    }
+  }
+}
+
+// 從有效備份檔還原資料時呼叫這個函式（而不是直接改 state 再存檔），
+// 才會正確解除鎖定狀態；Task 9 的匯入流程會用到
+function restoreState(newState) {
+  stateBlocked = false;
+  state = newState;
+  saveState();
+}
+
+function genId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+// 用本地時區組「今天」的日期字串，不能用 toISOString()（那是 UTC，台灣 00:00-07:59 會抓到昨天）
+function todayLocalDate() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function getCollection(path) {
+  return path.split('.').reduce((obj, key) => obj[key], state.data);
+}
+
+function ensureWritable() {
+  if (stateBlocked) {
+    alert('目前處於鎖定狀態（本機資料版本不相容或已損毀），新增/修改/刪除功能暫停使用。請先到「備份」頁匯入正確的備份檔。');
+    return false;
+  }
+  return true;
+}
+
+function addRecord(path, record) {
+  if (!ensureWritable()) return null;
+  const collection = getCollection(path);
+  const withMeta = Object.assign({}, record, { id: genId(), createdAt: nowIso(), updatedAt: nowIso() });
+  collection.push(withMeta);
+  saveState();
+  return withMeta;
+}
+
+function updateRecord(path, id, patch) {
+  if (!ensureWritable()) return null;
+  const collection = getCollection(path);
+  const idx = collection.findIndex(r => r.id === id);
+  if (idx === -1) throw new Error('Record not found: ' + id);
+  collection[idx] = Object.assign({}, collection[idx], patch, { updatedAt: nowIso() });
+  saveState();
+  return collection[idx];
+}
+
+function deleteRecord(path, id) {
+  if (!ensureWritable()) return false;
+  const collection = getCollection(path);
+  const idx = collection.findIndex(r => r.id === id);
+  if (idx === -1) return false;
+  collection.splice(idx, 1);
+  saveState();
+  return true;
+}
+
+function addInstallment(cardId, installment) {
+  if (!ensureWritable()) return null;
+  const card = state.data.creditCards.find(c => c.id === cardId);
+  if (!card) return null;
+  const withMeta = Object.assign({}, installment, { id: genId(), createdAt: nowIso(), updatedAt: nowIso() });
+  card.installments.push(withMeta);
+  saveState();
+  return withMeta;
+}
+
+function updateInstallment(cardId, installmentId, patch) {
+  if (!ensureWritable()) return null;
+  const card = state.data.creditCards.find(c => c.id === cardId);
+  if (!card) return null;
+  const idx = card.installments.findIndex(i => i.id === installmentId);
+  if (idx === -1) return null;
+  card.installments[idx] = Object.assign({}, card.installments[idx], patch, { updatedAt: nowIso() });
+  saveState();
+  return card.installments[idx];
+}
+
+function deleteInstallment(cardId, installmentId) {
+  if (!ensureWritable()) return false;
+  const card = state.data.creditCards.find(c => c.id === cardId);
+  if (!card) return false;
+  const idx = card.installments.findIndex(i => i.id === installmentId);
+  if (idx === -1) return false;
+  card.installments.splice(idx, 1);
+  saveState();
+  return true;
+}
+
+function sum(arr, field) {
+  return arr.reduce((total, item) => total + item[field], 0);
+}
+
+// 嚴格解析「正整數」字串：只接受純數字（不接受 "100abc"、空字串、小數、負數），回傳整數或 null
+function parsePositiveInt(str) {
+  const s = normalizeNumberString(str);
+  if (!/^\d+$/.test(s)) return null;
+  const n = Number(s);
+  return (Number.isInteger(n) && n > 0) ? n : null;
+}
+
+// 嚴格解析「整數」字串（允許 0 與負數，例如帳戶期初餘額可能是 0 或負）：回傳整數或 null
+function parseAnyInt(str) {
+  const s = normalizeNumberString(str);
+  if (!/^-?\d+$/.test(s)) return null;
+  const n = Number(s);
+  return Number.isInteger(n) ? n : null;
+}
+
+// ===================== 2. 衍生計算層 =====================
+function getCardBillingMonth(card, dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  const day = d.getDate();
+  let year = d.getFullYear();
+  let month = d.getMonth(); // 0-indexed
+  if (day > card.statementDay) {
+    month += 1;
+    if (month > 11) { month = 0; year += 1; }
+  }
+  return year + '-' + String(month + 1).padStart(2, '0');
+}
+
+function currentYearMonth() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+
+function monthlyFamilyExpense(yearMonth) {
+  return sum(
+    state.data.transactions.filter(t => t.scope === 'family' && t.date.slice(0, 7) === yearMonth),
+    'amount'
+  );
+}
+
+function familyFundCashBalance() {
+  return FAMILY_CATEGORIES.reduce((total, c) => total + familyFundCashBalanceByCategory(c), 0);
+}
+
+function familyFundCashBalanceByCategory(category) {
+  const deposits = sum(state.data.familyFundDeposits.filter(d => d.category === category), 'amount');
+  const cashExpenses = sum(
+    state.data.transactions.filter(t => t.scope === 'family' && t.category === category && (t.paymentMethod === 'cash' || t.paymentMethod === 'bankAccount')),
+    'amount'
+  );
+  const reimbursements = sum(state.data.familyFundReimbursements.filter(r => r.category === category), 'amount');
+  return deposits - cashExpenses - reimbursements;
+}
+
+function familyFundPendingReimbursement() {
+  return FAMILY_CATEGORIES.reduce((total, c) => total + familyFundPendingReimbursementByCategory(c), 0);
+}
+
+function familyFundPendingReimbursementByCategory(category) {
+  const cardExpenses = sum(
+    state.data.transactions.filter(t => t.scope === 'family' && t.category === category && t.paymentMethod === 'creditCard'),
+    'amount'
+  );
+  const reimbursements = sum(state.data.familyFundReimbursements.filter(r => r.category === category), 'amount');
+  return cardExpenses - reimbursements;
+}
+
+function familyFundEstimatedBalance() {
+  return FAMILY_CATEGORIES.reduce((total, c) => total + familyFundEstimatedBalanceByCategory(c), 0);
+}
+
+function familyFundEstimatedBalanceByCategory(category) {
+  return familyFundCashBalanceByCategory(category) - familyFundPendingReimbursementByCategory(category);
+}
+
+function familyCategoryTotals(yearMonth) {
+  const result = {};
+  FAMILY_CATEGORIES.forEach(c => {
+    result[c] = sum(
+      state.data.transactions.filter(t => t.scope === 'family' && t.category === c && t.date.slice(0, 7) === yearMonth),
+      'amount'
+    );
+  });
+  return result;
+}
+
+function familyFundStatusHtml(cash, pending, estimated) {
+  if (estimated < 0) {
+    return '<div class="status-note neg"><b>家庭基金不足 ' + money(Math.abs(estimated)) + '</b>：可先用個人帳戶補款，或增加家庭基金存入。</div>';
+  }
+  if (pending > 0) {
+    return '<div class="status-note muted">有 ' + money(pending) + ' 家庭刷卡支出尚未補款；補款到個人帳戶後，可用個人帳戶繳信用卡。</div>';
+  }
+  if (pending < 0) {
+    return '<div class="status-note muted">已超額補款 ' + money(Math.abs(pending)) + '，下次補款前可先核對是否有重複記錄。</div>';
+  }
+  return '';
+}
+
+function familyPendingByCardHtml(category) {
+  const rows = state.data.creditCards.map(card => {
+    const charges = sum(state.data.transactions.filter(t => t.scope === 'family' && t.category === category && t.paymentMethod === 'creditCard' && t.cardId === card.id), 'amount');
+    const linked = sum(state.data.familyFundReimbursements.filter(r => r.category === category && r.cardId === card.id), 'amount');
+    if (charges <= 0 && linked <= 0) return '';
+    const remaining = charges - linked;
+    return '<div class="row"><span><b>' + escapeHtml(card.name) + '</b><br><span class="muted">刷卡 ' + money(charges) + '／已補 ' + money(linked) + '／待補 ' + money(remaining) + (remaining < 0 ? '（已超額補款）' : '') + '</span></span>' +
+      '<button class="btn-ghost" onclick="openQuickReimbursement(\'' + category + '\',\'' + card.id + '\')">補款</button></div>';
+  }).filter(Boolean).join('');
+  const unassigned = sum(state.data.familyFundReimbursements.filter(r => r.category === category && r.cardId == null), 'amount');
+  const unassignedRow = unassigned > 0 ? '<div class="row"><span>未指定信用卡的補款</span><span>−' + money(unassigned) + '</span></div>' : '';
+  return rows || unassignedRow ? '<details class="tucked"><summary>待補款來源</summary>' + rows + unassignedRow + '</details>' : '';
+}
+
+function quickReimbRemaining(category, cardId) {
+  if (cardId == null) return familyFundPendingReimbursementByCategory(category);
+  const charges = sum(state.data.transactions.filter(t => t.scope === 'family' && t.category === category && t.paymentMethod === 'creditCard' && t.cardId === cardId), 'amount');
+  const linked = sum(state.data.familyFundReimbursements.filter(r => r.category === category && r.cardId === cardId), 'amount');
+  return charges - linked;
+}
+
+function bankAccountBalance(accountId) {
+  const account = state.data.bankAccounts.find(a => a.id === accountId);
+  if (!account) throw new Error('Account not found: ' + accountId);
+  let balance = account.openingBalance;
+  state.data.accountManualMovements
+    .filter(m => m.accountId === accountId)
+    .forEach(m => { balance += (m.direction === '存入' ? m.amount : -m.amount); });
+  balance -= sum(state.data.transactions.filter(t => t.paymentMethod === 'bankAccount' && t.accountId === accountId), 'amount');
+  balance -= sum(state.data.familyFundDeposits.filter(d => d.fromAccountId === accountId), 'amount');
+  balance -= sum(state.data.creditCardPayments.filter(p => p.fromAccountId === accountId), 'amount');
+  balance += sum(state.data.familyFundReimbursements.filter(r => r.method !== 'cash' && r.toAccountId === accountId), 'amount');
+  return balance;
+}
+
+function bankAccountsTotalAssets() {
+  return state.data.bankAccounts.reduce((total, a) => total + bankAccountBalance(a.id), 0);
+}
+
+function creditCardDueThisPeriod(cardId) {
+  const card = state.data.creditCards.find(c => c.id === cardId);
+  if (!card) return 0;
+  return creditCardDueForPeriod(cardId, currentBillingPeriod(card));
+}
+
+function currentBillingPeriod(card) {
+  const d = new Date();
+  let y = d.getFullYear();
+  let m = d.getMonth();
+  if (d.getDate() <= card.statementDay) {
+    m -= 1;
+    if (m < 0) {
+      m = 11;
+      y -= 1;
+    }
+  }
+  return y + '-' + String(m + 1).padStart(2, '0');
+}
+
+function periodDueDate(card, period) {
+  const [y, m] = period.split('-').map(Number);
+  let py = y;
+  let pm = m + 1;
+  if (pm > 12) {
+    pm = 1;
+    py += 1;
+  }
+  const lastDay = new Date(py, pm, 0).getDate();
+  return new Date(py, pm - 1, Math.min(card.dueDay, lastDay));
+}
+
+function creditCardDueForPeriod(cardId, period) {
+  return sum(
+    state.data.transactions.filter(t => t.paymentMethod === 'creditCard' && t.cardId === cardId && t.billingMonth === period && t.cardStatus !== '不列入計算'),
+    'amount'
+  );
+}
+
+function installmentRemainingPrincipal(inst) {
+  const remainingPeriods = Math.max(0, inst.totalPeriods - inst.paidPeriods);
+  if (remainingPeriods === 0) return 0;
+  return Math.min(inst.totalAmount, inst.perInstallment * remainingPeriods);
+}
+
+function creditCardInstallmentPrincipal(cardId) {
+  const card = state.data.creditCards.find(c => c.id === cardId);
+  return card ? card.installments.reduce((total, inst) => total + installmentRemainingPrincipal(inst), 0) : 0;
+}
+
+function cardPaymentReminder(card) {
+  const period = currentBillingPeriod(card);
+  const dueUpTo = sum(
+    state.data.transactions.filter(t => t.paymentMethod === 'creditCard' && t.cardId === card.id && t.cardStatus !== '不列入計算' && t.billingMonth <= period),
+    'amount'
+  );
+  const paid = sum(state.data.creditCardPayments.filter(p => p.cardId === card.id), 'amount');
+  const unpaid = dueUpTo - paid;
+  if (unpaid <= 0) return { level: 'none', amount: 0, dueDate: null, period };
+
+  const dueDate = periodDueDate(card, period);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diffDays = Math.round((dueDate - today) / 86400000);
+  if (diffDays < 0) return { level: 'overdue', amount: unpaid, dueDate, period };
+  if (diffDays <= 3) return { level: 'due-soon', amount: unpaid, dueDate, period };
+  return { level: 'none', amount: unpaid, dueDate, period };
+}
+
+function creditCardTotalOwed(cardId) {
+  const charges = sum(
+    state.data.transactions.filter(t => t.paymentMethod === 'creditCard' && t.cardId === cardId && t.cardStatus !== '不列入計算'),
+    'amount'
+  );
+  const paid = sum(state.data.creditCardPayments.filter(p => p.cardId === cardId), 'amount');
+  return charges - paid + creditCardInstallmentPrincipal(cardId);
+}
+
+function creditCardAvailableCredit(cardId) {
+  const card = state.data.creditCards.find(c => c.id === cardId);
+  return card.creditLimit - creditCardTotalOwed(cardId);
+}
+
+function personalMonthlyTotal(yearMonth) {
+  return sum(
+    state.data.transactions.filter(t => t.scope === 'personal' && t.date.slice(0, 7) === yearMonth),
+    'amount'
+  );
+}
+
+function personalCategoryTotals(yearMonth) {
+  const result = {};
+  state.data.transactions
+    .filter(t => t.scope === 'personal' && t.date.slice(0, 7) === yearMonth)
+    .forEach(t => {
+      const cat = t.category || '其他';
+      result[cat] = (result[cat] || 0) + t.amount;
+    });
+  return result;
+}
+
+function addMonthsToYearMonth(ym, delta) {
+  const parts = ym.split('-').map(Number);
+  const d = new Date(parts[0], parts[1] - 1 + delta, 1);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+
+function reportSummary(yearMonth) {
+  const personal = personalMonthlyTotal(yearMonth);
+  const family = monthlyFamilyExpense(yearMonth);
+  return { personal, family, total: personal + family };
+}
+
+function reportCategoryRanking(yearMonth) {
+  function toRanking(totals) {
+    return Object.keys(totals)
+      .map(category => ({ category, amount: totals[category] }))
+      .filter(item => item.amount > 0)
+      .sort((a, b) => b.amount - a.amount || a.category.localeCompare(b.category, 'zh-Hant'));
+  }
+  return {
+    personal: toRanking(personalCategoryTotals(yearMonth)),
+    family: toRanking(familyCategoryTotals(yearMonth))
+  };
+}
+
+function reportSixMonthTrend(endYearMonth) {
+  return Array.from({ length: 6 }, (_, index) => {
+    const ym = addMonthsToYearMonth(endYearMonth, index - 5);
+    return Object.assign({ ym }, reportSummary(ym));
+  });
+}
+
+function suggestCategory(note) {
+  const lower = note.toLowerCase();
+  for (const entry of state.data.categoryKeywords) {
+    if (entry.keywords.some(k => lower.includes(k.toLowerCase()))) return entry.category;
+  }
+  return '其他';
+}
+
+// ===================== 3. UI：設定 =====================
+function renderSettings() {
+  const banksHtml = state.data.banks.map(b => (
+    '<li class="row"><span>' + escapeHtml(b.name) + '</span>' +
+    '<button class="btn-danger" onclick="handleDeleteBank(\'' + b.id + '\')">刪除</button></li>'
+  )).join('');
+
+  const catsHtml = state.data.categoryKeywords.map(c => (
+    '<li><div class="row"><b>' + escapeHtml(c.category) + '</b>' +
+    '<button class="btn-danger" onclick="handleDeleteCategory(\'' + c.id + '\')">刪除</button></div>' +
+    '<div class="muted">' + c.keywords.map(escapeHtml).join('、') + '</div></li>'
+  )).join('');
+
+  return (
+    '<div class="card"><h2>銀行清單</h2><ul class="list">' + banksHtml + '</ul>' +
+    '<label>新增銀行名稱</label><input id="newBankName">' +
+    '<button class="btn-primary" onclick="handleAddBank()">新增銀行</button></div>' +
+
+    '<div class="card"><h2>個人分類關鍵字</h2><ul class="list">' + catsHtml + '</ul>' +
+    '<label>類別名稱</label><input id="newCatName">' +
+    '<label>關鍵字（用逗號分隔）</label><input id="newCatKeywords" placeholder="例如：麥當勞,超商">' +
+    '<button class="btn-primary" onclick="handleAddCategory()">新增類別</button></div>' +
+
+    '<div class="card"><h2>隱私</h2>' +
+    '<label><input type="checkbox"' + (state.data.settings.privacyModeAutoHide ? ' checked' : '') + ' onchange="handlePrivacyAutoHideChange(this.checked)"> 每次開啟時自動隱藏金額</label>' +
+    '<div class="muted">這項設定會在下次重新開啟時生效，不會改變目前畫面的顯示狀態。</div></div>'
+  );
+}
+
+function handlePrivacyAutoHideChange(checked) {
+  if (!ensureWritable()) { render(); return; }
+  state.data.settings.privacyModeAutoHide = checked === true;
+  saveState();
+  render();
+}
+
+function handleAddBank() {
+  const name = document.getElementById('newBankName').value.trim();
+  if (!name) { showFieldError('newBankName', '請輸入銀行名稱'); return; }
+  addRecord('banks', { name });
+  render();
+}
+
+function handleDeleteBank(id) {
+  const referenced = state.data.creditCards.some(c => c.bankId === id) ||
+                      state.data.bankAccounts.some(a => a.bankId === id);
+  if (referenced) { alert('這家銀行還有信用卡或帳戶在使用，無法刪除。'); return; }
+  openConfirmModal('刪除銀行', '確定刪除這家銀行？', () => {
+    deleteWithFeedback('banks', id, '已刪除銀行');
+  }, '刪除');
+}
+
+function handleAddCategory() {
+  const name = document.getElementById('newCatName').value.trim();
+  const keywords = document.getElementById('newCatKeywords').value.split(',').map(s => s.trim()).filter(Boolean);
+  if (!name) { showFieldError('newCatName', '請輸入類別名稱'); return; }
+  if (state.data.categoryKeywords.some(c => c.category === name)) { alert('這個類別已經存在'); return; }
+  addRecord('categoryKeywords', { category: name, keywords });
+  render();
+}
+
+function handleDeleteCategory(id) {
+  openConfirmModal('刪除類別', '確定刪除這個類別？', () => {
+    deleteWithFeedback('categoryKeywords', id, '已刪除類別');
+  }, '刪除');
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, ch => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[ch]));
+}
+
+function optSelected(current, value) {
+  return current === value ? ' selected' : '';
+}
+
+function inputVal(v) {
+  return escapeHtml(v == null ? '' : String(v));
+}
+
+function openModal(title, bodyHtml) {
+  const modal = document.getElementById('modal');
+  modal.innerHTML =
+    '<div class="sheet" onclick="event.stopPropagation()"><button class="modal-close" onclick="closeModal()">✕</button>' +
+    '<h2>' + escapeHtml(title) + '</h2>' + bodyHtml + '</div>';
+  modal.style.display = 'flex';
+  modal.onclick = closeModal;
+  enhanceFormAccessibility(modal);
+}
+
+function closeModal() {
+  const modal = document.getElementById('modal');
+  modal.style.display = 'none';
+  modal.innerHTML = '';
+  modal.onclick = null;
+}
+
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+
+let pendingConfirmAction = null;
+function openConfirmModal(title, message, action, dangerText) {
+  pendingConfirmAction = action;
+  openModal(title,
+    '<p>' + escapeHtml(message) + '</p>' +
+    '<button class="btn-danger" onclick="runConfirmAction()">' + escapeHtml(dangerText || '確定') + '</button>' +
+    '<button class="btn-ghost" onclick="closeModal()">取消</button>');
+}
+
+function runConfirmAction() {
+  const action = pendingConfirmAction;
+  pendingConfirmAction = null;
+  closeModal();
+  if (action) action();
+}
+
+function deleteWithFeedback(path, id, successMsg) {
+  const deleted = deleteRecord(path, id);
+  if (!deleted) {
+    showToast('刪除失敗（可能處於鎖定狀態或記錄已不存在），請到備份頁確認');
+    return false;
+  }
+  renderKeepScroll();
+  showToast(successMsg || '已刪除');
+  return true;
+}
+
+function modalCancelButton() {
+  return '<button class="btn-ghost" onclick="closeModal()">取消</button>';
+}
+
+function clearFieldError(id) {
+  const field = document.getElementById(id);
+  if (!field) return;
+  field.removeAttribute('aria-invalid');
+  field.removeAttribute('aria-describedby');
+  const old = document.getElementById(id + '_error');
+  if (old) old.remove();
+}
+
+function showFieldError(id, msg) {
+  const field = document.getElementById(id);
+  if (!field) {
+    showToast(msg);
+    return;
+  }
+  clearFieldError(id);
+  const error = document.createElement('div');
+  error.id = id + '_error';
+  error.className = 'field-error';
+  error.textContent = msg;
+  field.setAttribute('aria-invalid', 'true');
+  field.setAttribute('aria-describedby', error.id);
+  field.insertAdjacentElement('afterend', error);
+  field.focus();
+}
+
+function normalizeNumberString(str) {
+  return String(str == null ? '' : str).trim().replace(/[,\s，]/g, '');
+}
+
+function enhanceFormAccessibility(root) {
+  root = root || document;
+  root.querySelectorAll('label:not([for])').forEach(label => {
+    const nested = label.querySelector('input, select, textarea');
+    if (nested && nested.id) {
+      label.setAttribute('for', nested.id);
+      return;
+    }
+    let node = label.nextElementSibling;
+    while (node && node.classList && node.classList.contains('muted')) node = node.nextElementSibling;
+    const control = node && (node.matches('input, select, textarea') ? node : node.querySelector && node.querySelector('input, select, textarea'));
+    if (control && control.id) label.setAttribute('for', control.id);
+  });
+}
+
+let toastTimer = null;
+function showToast(msg) {
+  const box = document.getElementById('toast');
+  box.innerHTML = '<div class="toast-msg">' + escapeHtml(msg) + '</div>';
+  const el = box.firstChild;
+  requestAnimationFrame(() => el.classList.add('show'));
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    el.classList.remove('show');
+    setTimeout(() => { box.innerHTML = ''; }, 300);
+  }, 2200);
+}
+
+function renderKeepScroll() {
+  const y = window.scrollY;
+  render();
+  window.scrollTo(0, y);
+}
+
+function revealRecord(id) {
+  if (!id) return;
+  requestAnimationFrame(() => {
+    const el = document.querySelector('[data-record-id="' + id + '"]');
+    if (!el) return;
+    el.classList.add('just-saved');
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setTimeout(() => el.classList.remove('just-saved'), 1800);
+  });
+}
+
+function money(n) {
+  if (privacyAmountsHidden) return PRIVACY_MASK;
+  const sign = n < 0 ? '-' : '';
+  return sign + 'NT$' + Math.abs(n).toLocaleString();
+}
+
+function handleTogglePrivacy() {
+  privacyAmountsHidden = !privacyAmountsHidden;
+  render();
+}
+
+const ICONS = {
+  overview: '<path d="M4 11.5 12 5l8 6.5"/><path d="M6.5 10.5V20h11v-9.5"/><path d="M9.5 20v-5.5h5V20"/>',
+  personal: '<circle cx="12" cy="8" r="3.2"/><path d="M5.5 20c.5-4.1 2.6-6.2 6.5-6.2s6 2.1 6.5 6.2"/>',
+  family: '<path d="M3.5 11.2 12 4l8.5 7.2"/><path d="M6 9.6V20h12V9.6"/><path d="M9.2 14.2c0-1.1.8-1.8 1.8-1.8.5 0 .9.2 1 .6.2-.4.6-.6 1.1-.6 1 0 1.8.7 1.8 1.8 0 1.7-2.8 3.3-2.8 3.3s-2.8-1.6-2.8-3.3Z"/>',
+  more: '<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
+  creditCards: '<rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="M3 10h18M7 15h4"/>',
+  bankAccounts: '<path d="m3 9 9-5 9 5"/><path d="M5 10h14M6.5 10v7M10.2 10v7M13.8 10v7M17.5 10v7M4 20h16"/>',
+  reports: '<path d="M5 20V11h3v9M10.5 20V5h3v15M16 20v-7h3v7M3 20h18"/>',
+  dataCheck: '<path d="M8 4.5h8M7 3h10v4H7z"/><path d="M6 5H4.5v16h15V5H18"/><path d="m8 14 2.2 2.2L16.5 10"/>',
+  backup: '<path d="M7 7.5A7 7 0 1 1 5.2 15"/><path d="M3.5 8H8V3.5"/><path d="M12 8v7m0 0-3-3m3 3 3-3"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.8 1.8 0 0 0 .4 2l.1.1-2.8 2.8-.1-.1a1.8 1.8 0 0 0-2-.4 1.8 1.8 0 0 0-1.1 1.6v.2h-4v-.2A1.8 1.8 0 0 0 8.8 19.4a1.8 1.8 0 0 0-2 .4l-.1.1-2.8-2.8.1-.1a1.8 1.8 0 0 0 .4-2A1.8 1.8 0 0 0 2.8 14h-.2v-4h.2A1.8 1.8 0 0 0 4.4 9a1.8 1.8 0 0 0-.4-2l-.1-.1 2.8-2.8.1.1a1.8 1.8 0 0 0 2 .4A1.8 1.8 0 0 0 10 3V2.8h4V3a1.8 1.8 0 0 0 1 1.6 1.8 1.8 0 0 0 2-.4l.1-.1 2.8 2.8-.1.1a1.8 1.8 0 0 0-.4 2A1.8 1.8 0 0 0 21 10h.2v4H21a1.8 1.8 0 0 0-1.6 1Z"/>',
+  privacyShow: '<path d="M2.5 12s3.5-5 9.5-5 9.5 5 9.5 5-3.5 5-9.5 5-9.5-5-9.5-5Z"/><circle cx="12" cy="12" r="2.5"/>',
+  privacyHide: '<path d="M4 4 20 20M9.2 7.4A10.7 10.7 0 0 1 12 7c6 0 9.5 5 9.5 5a16 16 0 0 1-2.4 2.7M6.2 9A15.2 15.2 0 0 0 2.5 12s3.5 5 9.5 5c1.2 0 2.3-.2 3.3-.5M10.3 10.3A2.4 2.4 0 0 0 12 14.5"/>',
+  quickAdd: '<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>',
+  alert: '<path d="M12 3 2.8 20h18.4L12 3Z"/><path d="M12 9v5M12 17.2v.1"/>'
+};
+
+function iconHtml(name, className) {
+  const body = ICONS[name];
+  if (!body) return '';
+  return '<svg class="icon' + (className ? ' ' + className : '') + '" viewBox="0 0 24 24" aria-hidden="true">' + body + '</svg>';
+}
+
+function privacyToggleHtml() {
+  return '<div class="app-topbar">' +
+    '<div class="app-identity"><span class="app-mark">' + iconHtml('family') + '</span>' +
+    '<div><div class="app-name">我們家的資金路線</div><div class="app-kicker">家庭與個人記帳</div></div></div>' +
+    '<button class="privacy-toggle" aria-pressed="' + (privacyAmountsHidden ? 'true' : 'false') + '" onclick="handleTogglePrivacy()">' +
+    iconHtml(privacyAmountsHidden ? 'privacyShow' : 'privacyHide') +
+    '<span>' + (privacyAmountsHidden ? '顯示金額' : '隱藏金額') + '</span></button></div>';
+}
+
+function formatDateShort(date) {
+  return (date.getMonth() + 1) + '/' + date.getDate();
+}
+
+function movedOutOfCurrentFilter(scope, oldDate, newDate) {
+  const f = listFilters && listFilters[scope];
+  if (!f || f.showAll || !oldDate || !newDate) return false;
+  return oldDate.slice(0, 7) === f.month && newDate.slice(0, 7) !== f.month;
+}
+
+function editSuccessMessage(scope, oldDate, newDate, fallback) {
+  return movedOutOfCurrentFilter(scope, oldDate, newDate)
+    ? fallback + '；日期不在目前篩選月份，記錄已移到對應月份'
+    : fallback;
+}
+
+function lastReconciliation(module, refId) {
+  return state.data.monthlyReconciliation
+    .filter(r => r.module === module && (refId === undefined || r.refId === refId))
+    .sort((a, b) => {
+      if (a.date !== b.date) return b.date.localeCompare(a.date);
+      return (b.createdAt || '').localeCompare(a.createdAt || '');
+    })[0] || null;
+}
+
+function renderLastReconciliation(module, refId) {
+  const last = lastReconciliation(module, refId);
+  return last
+    ? '<div class="muted">上次對帳：' + last.date + '，' + (last.diff === 0 ? '沒有落差' : '落差 ' + money(last.diff)) + '</div>'
+    : '<div class="muted">尚未對帳過</div>';
+}
+
+function reconciliationJumpTarget(module) {
+  return module === 'familyFund' ? 'family' : (module === 'creditCard' ? 'creditCards' : 'bankAccounts');
+}
+
+function reconciliationHistory(module, refId) {
+  return state.data.monthlyReconciliation
+    .filter(r => r.module === module && (refId === undefined || r.refId === refId))
+    .sort((a, b) => {
+      if (a.date !== b.date) return b.date.localeCompare(a.date);
+      return (b.createdAt || '').localeCompare(a.createdAt || '');
+    })
+    .slice(0, 5);
+}
+
+function renderReconciliationHistory(module, refId) {
+  const history = reconciliationHistory(module, refId);
+  if (history.length === 0) return '';
+  const rows = history.map(r => (
+    '<div class="row"><span>' + r.date + '</span><span>' + (r.diff === 0 ? '沒有落差' : money(r.diff)) + '</span></div>'
+  )).join('');
+  return '<details class="tucked"><summary>最近對帳（' + history.length + '）</summary>' + rows + '</details>';
+}
+
+function reconciliationAdjustmentText(diff, options) {
+  if (diff < 0 && options.adjustmentNegative) return options.adjustmentNegative;
+  if (diff > 0 && options.adjustmentPositive) return options.adjustmentPositive;
+  return '自動產生一筆' + (diff < 0 ? '提出' : '存入') + '記錄補齊差額';
+}
+
+function ensureReconciliationWritable() {
+  if (!stateBlocked) return true;
+  showFieldError('reconcileActual', '目前處於鎖定狀態，請先到「備份」頁匯入正確版本的備份檔。');
+  showToast('目前處於鎖定狀態，無法儲存對帳');
+  return false;
+}
+
+function checkOrphanAndAmounts() {
+  const accountIds = new Set(state.data.bankAccounts.map(a => a.id));
+  const cardIds = new Set(state.data.creditCards.map(c => c.id));
+  const problems = [];
+  const label = (primary, fallback) => primary || fallback || '未命名';
+
+  state.data.transactions.forEach(t => {
+    const name = label(t.note, t.category);
+    if (!(Number.isInteger(t.amount) && t.amount > 0)) {
+      problems.push({ type: '金額異常', desc: '交易「' + name + '」金額不是正整數', id: t.id, jump: t.scope });
+    }
+    if (t.scope === 'family' && FAMILY_CATEGORIES.indexOf(t.category) === -1) {
+      problems.push({ type: '資料異常', desc: '交易「' + name + '」的家庭分類不正確', id: t.id, jump: 'family' });
+    }
+    if (t.paymentMethod === 'bankAccount' && !accountIds.has(t.accountId)) {
+      problems.push({ type: '孤兒資料', desc: '交易「' + name + '」指向不存在的銀行帳戶', id: t.id, jump: t.scope });
+    }
+    if (t.paymentMethod === 'creditCard' && !cardIds.has(t.cardId)) {
+      problems.push({ type: '孤兒資料', desc: '交易「' + name + '」指向不存在的信用卡', id: t.id, jump: t.scope });
+    }
+  });
+
+  state.data.creditCardPayments.forEach(p => {
+    if (!(Number.isInteger(p.amount) && p.amount > 0)) problems.push({ type: '金額異常', desc: '一筆還款金額不是正整數', id: p.id, jump: 'creditCards' });
+    if (!cardIds.has(p.cardId)) problems.push({ type: '孤兒資料', desc: '一筆還款指向不存在的信用卡', id: p.id, jump: 'creditCards' });
+    if (p.fromAccountId != null && !accountIds.has(p.fromAccountId)) problems.push({ type: '孤兒資料', desc: '一筆還款指向不存在的帳戶', id: p.id, jump: 'creditCards' });
+  });
+
+  state.data.creditCards.forEach(c => {
+    c.installments.forEach(inst => {
+      if (!Number.isInteger(inst.totalAmount) || inst.totalAmount <= 0) {
+        problems.push({ type: '金額異常', desc: c.name + ' 的一筆分期總額不是正整數', id: inst.id, jump: 'creditCards' });
+      }
+      if (!Number.isInteger(inst.perInstallment) || inst.perInstallment <= 0) {
+        problems.push({ type: '金額異常', desc: c.name + ' 的一筆分期每期金額不是正整數', id: inst.id, jump: 'creditCards' });
+      }
+      if (!Number.isInteger(inst.totalPeriods) || inst.totalPeriods <= 0) {
+        problems.push({ type: '金額異常', desc: c.name + ' 的一筆分期總期數不是正整數', id: inst.id, jump: 'creditCards' });
+      }
+      if (!Number.isInteger(inst.paidPeriods) || inst.paidPeriods < 0 || inst.paidPeriods > inst.totalPeriods) {
+        problems.push({ type: '資料異常', desc: c.name + ' 的一筆分期已還期數不正確', id: inst.id, jump: 'creditCards' });
+      }
+    });
+  });
+
+  state.data.accountManualMovements.forEach(m => {
+    if (!(Number.isInteger(m.amount) && m.amount > 0)) problems.push({ type: '金額異常', desc: '一筆帳戶異動金額不是正整數', id: m.id, jump: 'bankAccounts' });
+    if (!accountIds.has(m.accountId)) problems.push({ type: '孤兒資料', desc: '一筆帳戶異動指向不存在的帳戶', id: m.id, jump: 'bankAccounts' });
+  });
+
+  state.data.familyFundDeposits.forEach(d => {
+    if (!(Number.isInteger(d.amount) && d.amount > 0)) problems.push({ type: '金額異常', desc: '一筆家庭基金存入金額不是正整數', id: d.id, jump: 'family' });
+    if (FAMILY_CATEGORIES.indexOf(d.category) === -1) problems.push({ type: '資料異常', desc: '一筆家庭基金存入的類別不正確', id: d.id, jump: 'family' });
+    if (d.fromAccountId != null && !accountIds.has(d.fromAccountId)) problems.push({ type: '孤兒資料', desc: '一筆存入指向不存在的帳戶', id: d.id, jump: 'family' });
+  });
+
+  state.data.familyFundReimbursements.forEach(r => {
+    if (!(Number.isInteger(r.amount) && r.amount > 0)) problems.push({ type: '金額異常', desc: '一筆補款金額不是正整數', id: r.id, jump: 'family' });
+    if (FAMILY_CATEGORIES.indexOf(r.category) === -1) problems.push({ type: '資料異常', desc: '一筆補款的類別不正確', id: r.id, jump: 'family' });
+    if (r.method !== 'cash' && !accountIds.has(r.toAccountId)) problems.push({ type: '孤兒資料', desc: '一筆補款指向不存在的帳戶', id: r.id, jump: 'family' });
+    if (r.method === 'cash' && r.toAccountId != null) problems.push({ type: '資料異常', desc: '一筆現金補款不應保留撥入帳戶', id: r.id, jump: 'family' });
+    if (r.cardId != null && !cardIds.has(r.cardId)) problems.push({ type: '孤兒資料', desc: '一筆補款關聯到不存在的信用卡', id: r.id, jump: 'family' });
+  });
+
+  state.data.monthlyReconciliation.forEach(r => {
+    const jump = reconciliationJumpTarget(r.module);
+    if (r.module === 'bankAccount' && !accountIds.has(r.refId)) problems.push({ type: '孤兒資料', desc: '一筆對帳紀錄指向不存在的銀行帳戶', id: r.id, jump });
+    if (r.module === 'creditCard' && !cardIds.has(r.refId)) problems.push({ type: '孤兒資料', desc: '一筆對帳紀錄指向不存在的信用卡', id: r.id, jump });
+    if (r.module === 'familyFund' && FAMILY_CATEGORIES.indexOf(r.refId) === -1) problems.push({ type: '資料異常', desc: '一筆家庭基金對帳紀錄的類別不正確', id: r.id, jump: 'family' });
+    if (r.diff !== r.actualBalance - r.recordedBalance) problems.push({ type: '資料異常', desc: '一筆對帳紀錄的差額跟實際/記錄餘額對不起來', id: r.id, jump });
+    if (r.adjustmentRecordId != null) {
+      const adjustmentExists = r.module === 'bankAccount'
+        ? state.data.accountManualMovements.some(m => m.id === r.adjustmentRecordId)
+        : r.module === 'familyFund'
+          ? (r.diff < 0 ? state.data.transactions : state.data.familyFundDeposits).some(x => x.id === r.adjustmentRecordId)
+          : false;
+      if (!adjustmentExists) problems.push({ type: '孤兒資料', desc: '一筆對帳紀錄的調整記錄找不到對應的異動/交易/存入記錄', id: r.id, jump });
+    }
+  });
+
+  return problems;
+}
+
+function checkHealthAnomalies() {
+  const problems = [];
+  FAMILY_CATEGORIES.forEach(cat => {
+    const catCash = familyFundCashBalanceByCategory(cat);
+    const catEstimated = familyFundEstimatedBalanceByCategory(cat);
+    if (catCash < 0) problems.push({ type: '家庭基金', desc: cat + ' 信封現金餘額是負的（' + money(catCash) + '），可能有支出沒有對應的存入', jump: 'family' });
+    if (catEstimated < 0) problems.push({ type: '家庭基金', desc: cat + ' 信封預估餘額是負的（' + money(catEstimated) + '），把已刷卡但還沒補款的部分算進去後會透支', jump: 'family' });
+  });
+
+  state.data.bankAccounts.forEach(a => {
+    const balance = bankAccountBalance(a.id);
+    if (balance < 0) problems.push({ type: '銀行帳戶', desc: a.name + ' 餘額是負的（' + money(balance) + '）', id: a.id, jump: 'bankAccounts' });
+  });
+
+  state.data.creditCards.forEach(c => {
+    const owed = creditCardTotalOwed(c.id);
+    if (owed > c.creditLimit) problems.push({ type: '信用卡', desc: c.name + ' 總欠款（' + money(owed) + '）超過額度（' + money(c.creditLimit) + '）', id: c.id, jump: 'creditCards' });
+  });
+
+  return problems;
+}
+
+const TEST_BACKUP_KEY = STORAGE_KEY + '_realDataBackup';
+const TEST_MODE_KEY = STORAGE_KEY + '_testMode';
+
+function isInTestMode() {
+  try {
+    return localStorage.getItem(TEST_MODE_KEY) === '1';
+  } catch (e) {
+    return false;
+  }
+}
+
+function buildTestFixtureState() {
+  const s = defaultState();
+  const mk = (extra) => Object.assign({ id: genId(), createdAt: nowIso(), updatedAt: nowIso() }, extra);
+  const today = todayLocalDate();
+  const bank = mk({ name: '測試銀行' });
+  s.data.banks = [bank];
+  const acc1 = mk({ name: '測試帳戶', bankId: bank.id, accountType: '儲蓄', openingBalance: 20000 });
+  s.data.bankAccounts = [acc1];
+  const card1 = mk({ name: '測試信用卡', bankId: bank.id, creditLimit: 50000, statementDay: 5, dueDay: 20, installments: [] });
+  s.data.creditCards = [card1];
+  s.data.transactions = [
+    mk({
+      date: today, amount: 500, note: '午餐', category: '餐飲', scope: 'personal', paymentMethod: 'cash',
+      accountId: null, cardId: null, billingMonth: null, cardStatus: null
+    }),
+    mk({
+      date: today, amount: 3000, note: '家用採買', category: '家用', scope: 'family', paymentMethod: 'creditCard',
+      accountId: null, cardId: card1.id, billingMonth: getCardBillingMonth(card1, today), cardStatus: '未結帳'
+    })
+  ];
+  s.data.familyFundDeposits = [mk({ date: today, amount: 10000, depositedBy: '測試', category: '家用', fromAccountId: null })];
+  s.data.familyFundReimbursements = [mk({ date: today, amount: 1000, method: 'bankAccount', toAccountId: acc1.id, cardId: null, category: '家用', note: '測試補款' })];
+  s.data.creditCardPayments = [mk({ date: today, amount: 500, cardId: card1.id, fromAccountId: acc1.id, note: '測試還款' })];
+  return s;
+}
+
+function handleEnterTestMode() {
+  if (stateBlocked) {
+    alert('目前處於鎖定狀態，資料本身可能已損毀，不能在這個狀態下進入測試模式（避免把有問題的資料當成備份）。請先處理好鎖定狀態。');
+    return;
+  }
+  if (isInTestMode()) {
+    alert('已經在測試模式中，不能重複進入（會覆蓋掉唯一一份真實資料備份）。');
+    return;
+  }
+  if (!confirm('這會暫時把你目前的真實資料換成假資料，方便你熟悉功能或測試計算邏輯。真實資料會被安全備份，退出測試模式時會完整還原。確定要進入測試資料模式嗎？')) return;
+
+  const currentRaw = localStorage.getItem(STORAGE_KEY);
+  if (!currentRaw) {
+    alert('目前沒有偵測到任何本機資料可以備份，為安全起見取消操作。');
+    return;
+  }
+
+  const fixtureState = buildTestFixtureState();
+  const fixtureJson = JSON.stringify(fixtureState);
+  const fixtureCheck = deepValidateAndMigrate(JSON.parse(fixtureJson));
+  if (fixtureCheck.error) {
+    alert('測試資料本身格式有問題（' + fixtureCheck.error + '），已取消，沒有動到任何資料。請聯絡協助排查測試資料產生邏輯。');
+    return;
+  }
+
+  let backupWritten = false;
+  let fixtureWritten = false;
+  try {
+    localStorage.setItem(TEST_BACKUP_KEY, currentRaw);
+    backupWritten = true;
+    localStorage.setItem(STORAGE_KEY, fixtureJson);
+    fixtureWritten = true;
+    localStorage.setItem(TEST_MODE_KEY, '1');
+  } catch (e) {
+    try {
+      if (fixtureWritten) localStorage.setItem(STORAGE_KEY, currentRaw);
+      if (backupWritten) localStorage.removeItem(TEST_BACKUP_KEY);
+      localStorage.removeItem(TEST_MODE_KEY);
+    } catch (e2) {
+      alert('進入測試模式失敗，回復真實資料時也失敗。你的真實資料備份仍保留在 localStorage 的 "' + TEST_BACKUP_KEY + '" 這個 key 裡，請立刻聯絡協助手動處理，不要繼續操作。');
+      return;
+    }
+    alert('進入測試模式失敗（可能是儲存空間問題），已確認沒有動到你的真實資料。');
+    return;
+  }
+  state = loadState();
+  render();
+}
+
+function handleExitTestMode() {
+  if (!isInTestMode()) return;
+  if (!confirm('確定要退出測試資料模式並還原你的真實資料嗎？測試期間產生的任何資料都會被丟棄。')) return;
+
+  const backup = localStorage.getItem(TEST_BACKUP_KEY);
+  if (!backup) {
+    alert('找不到備份的真實資料，為安全起見不會清空目前畫面上的資料。請立刻聯絡協助排查，不要繼續操作。');
+    return;
+  }
+
+  let parsedBackup;
+  try {
+    parsedBackup = JSON.parse(backup);
+  } catch (e) {
+    alert('備份資料無法解析，為安全起見不會還原、也不會刪除備份。請立刻聯絡協助處理，不要繼續操作。');
+    return;
+  }
+  const backupCheck = deepValidateAndMigrate(parsedBackup);
+  if (backupCheck.error) {
+    alert('備份資料驗證失敗（' + backupCheck.error + '），為安全起見不會還原、也不會刪除備份。請立刻聯絡協助處理。');
+    return;
+  }
+
+  try {
+    localStorage.setItem(STORAGE_KEY, backup);
+  } catch (e) {
+    alert('還原失敗（可能是儲存空間問題），你的真實資料備份仍保留在 localStorage 的 "' + TEST_BACKUP_KEY + '" 這個 key 裡，不會遺失，請聯絡協助手動還原。');
+    return;
+  }
+  localStorage.removeItem(TEST_BACKUP_KEY);
+  localStorage.removeItem(TEST_MODE_KEY);
+  state = loadState();
+  render();
+}
+
+function testModeBannerHtml() {
+  if (!isInTestMode()) return '';
+  return '<div class="alert-overdue test-mode-banner" style="margin-bottom:12px"><div>目前是測試資料模式。<br>畫面上都是假資料，不是你的真實記帳。</div><button class="btn-ghost" onclick="handleExitTestMode()">退出測試模式</button></div>';
+}
+
+function hasBackupWorthyData() {
+  const keys = [
+    'transactions', 'familyFundDeposits', 'familyFundReimbursements',
+    'creditCardPayments', 'accountManualMovements', 'monthlyReconciliation',
+    'bankAccounts', 'creditCards'
+  ];
+  return keys.some(key => Array.isArray(state.data[key]) && state.data[key].length > 0);
+}
+
+function backupReminderInfo() {
+  if (stateBlocked || isInTestMode() || !hasBackupWorthyData()) return { show: false, days: null };
+
+  const now = new Date();
+  const snoozedUntil = state.backupReminderSnoozedUntil ? new Date(state.backupReminderSnoozedUntil) : null;
+  const maxSnooze = new Date(now.getTime() + BACKUP_REMINDER_SNOOZE_DAYS * 86400000);
+  if (snoozedUntil && snoozedUntil > maxSnooze) {
+    state.backupReminderSnoozedUntil = null;
+    if (storageAvailable) saveState();
+  } else if (snoozedUntil && now < snoozedUntil) {
+    return { show: false, days: null };
+  }
+
+  if (!state.lastBackupAt) return { show: true, days: null };
+  const backupDay = new Date(state.lastBackupAt);
+  backupDay.setHours(0, 0, 0, 0);
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const days = Math.round((today - backupDay) / 86400000);
+  if (days < 0) return { show: false, days };
+  return { show: days >= BACKUP_REMINDER_DAYS, days };
+}
+
+function handleSnoozeBackupReminder() {
+  state.backupReminderSnoozedUntil = new Date(Date.now() + BACKUP_REMINDER_SNOOZE_DAYS * 86400000).toISOString();
+  saveState();
+  render();
+}
+
+function backupReminderBannerHtml() {
+  if (currentView === 'more' && moreView === 'backup') return '';
+  const info = backupReminderInfo();
+  if (!info.show) return '';
+  const message = info.days === null
+    ? '你還沒匯出過備份。資料只存在這個瀏覽器裡，換手機或清快取就會消失。'
+    : '已經 ' + info.days + ' 天沒備份了。資料只存在這個瀏覽器裡，建議盡快匯出。';
+  return '<div class="backup-ticket" role="status">' + iconHtml('backup') + '<div>' + message + '</div>' +
+    '<div class="action-row"><button class="btn-primary" onclick="routeToView(\'backup\'); render();">立即備份</button>' +
+    '<button class="btn-ghost" onclick="handleSnoozeBackupReminder()">稍後提醒</button></div></div>';
+}
+
+function handleReconcileDiffInput(recorded, options) {
+  options = options || {};
+  const actual = parseAnyInt(document.getElementById('reconcileActual').value);
+  const area = document.getElementById('reconcileDiffArea');
+  clearFieldError('reconcileActual');
+  if (actual === null) {
+    area.innerHTML = '';
+    return;
+  }
+  const diff = actual - recorded;
+  if (diff === 0) {
+    area.innerHTML = '<div class="muted" style="margin-top:8px">金額相符，沒有落差。</div>';
+    enhanceFormAccessibility(document.getElementById('modal'));
+    return;
+  }
+  const alertClass = diff < 0 ? 'alert-overdue' : 'alert-due';
+  if (options.allowAdjustment) {
+    area.innerHTML =
+      '<div class="' + alertClass + '" style="margin-top:8px">有落差：' + money(diff) + '（' + (diff < 0 ? '實際比記錄少，可能漏記了支出' : '實際比記錄多，可能漏記了存入') + '）</div>' +
+      '<label style="margin-top:8px"><input type="checkbox" id="reconcileCreateAdjustment"> 直接建立對帳調整（' + reconciliationAdjustmentText(diff, options) + '）</label>';
+  } else {
+    area.innerHTML =
+      '<div class="' + alertClass + '" style="margin-top:8px">有落差：' + money(diff) + '。建議核對這張卡的逐筆消費、帳單月份、還款記錄；信用卡不建議用一筆調整蓋過差異。</div>';
+  }
+  enhanceFormAccessibility(document.getElementById('modal'));
+}
+
+function openReconcileBankAccount(accountId) {
+  const acc = state.data.bankAccounts.find(a => a.id === accountId);
+  if (!acc) { showToast('找不到這個帳戶'); return; }
+  const recorded = bankAccountBalance(accountId);
+  openModal('對帳：' + acc.name,
+    '<div class="muted">app 目前算出的餘額</div><div class="big">' + money(recorded) + '</div>' +
+    '<label>實際餘額（銀行 App 顯示的數字）</label>' +
+    '<input id="reconcileActual" type="number" oninput="handleReconcileDiffInput(' + recorded + ', { allowAdjustment: true, adjustmentPositive: \'建立一筆帳戶存入記錄補齊差額\', adjustmentNegative: \'建立一筆帳戶提出記錄補齊差額\' })">' +
+    '<div id="reconcileDiffArea"></div>' +
+    '<button class="btn-primary" onclick="submitBankReconciliation(\'' + accountId + '\', ' + recorded + ')">記錄對帳結果</button>' +
+    modalCancelButton());
+}
+
+function submitBankReconciliation(accountId, recorded) {
+  const actual = parseAnyInt(document.getElementById('reconcileActual').value);
+  if (actual === null) { showFieldError('reconcileActual', '請輸入實際餘額（可以是 0 或負數，但不能有文字）'); return; }
+  if (!ensureReconciliationWritable()) return;
+  const diff = actual - recorded;
+  const wantsAdjustment = diff !== 0 && document.getElementById('reconcileCreateAdjustment') && document.getElementById('reconcileCreateAdjustment').checked;
+  let adjustmentRecordId = null;
+  if (wantsAdjustment) {
+    const movement = addRecord('accountManualMovements', {
+      accountId,
+      date: todayLocalDate(),
+      amount: Math.abs(diff),
+      direction: diff > 0 ? '存入' : '提出',
+      note: '對帳調整（' + currentYearMonth() + '）'
+    });
+    if (!movement) { showToast('儲存失敗（可能處於鎖定狀態或儲存空間問題），請到備份頁確認'); return; }
+    adjustmentRecordId = movement.id;
+  }
+  const saved = addRecord('monthlyReconciliation', {
+    date: todayLocalDate(),
+    module: 'bankAccount',
+    refId: accountId,
+    recordedBalance: recorded,
+    actualBalance: actual,
+    diff,
+    adjustmentRecordId
+  });
+  if (!saved) { showToast('儲存失敗（可能處於鎖定狀態或儲存空間問題），請到備份頁確認'); return; }
+  closeModal();
+  renderKeepScroll();
+  revealRecord(accountId);
+  showToast(diff === 0 ? '對帳完成，沒有落差' : ('已記錄對帳結果' + (wantsAdjustment ? '，並建立調整' : '')));
+}
+
+function openReconcileFamilyFund(category) {
+  const recorded = familyFundCashBalanceByCategory(category);
+  openModal('對帳：' + category,
+    '<div class="muted">app 目前算出的現金餘額</div><div class="big">' + money(recorded) + '</div>' +
+    '<div class="muted">跟家人核對出來的實際金額（這個信封）</div>' +
+    '<label>實際餘額</label>' +
+    '<input id="reconcileActual" type="number" oninput="handleReconcileDiffInput(' + recorded + ', { allowAdjustment: true, adjustmentPositive: \'建立一筆' + category + '存入補齊差額\', adjustmentNegative: \'建立一筆' + category + '支出補齊差額\' })">' +
+    '<div id="reconcileDiffArea"></div>' +
+    '<button class="btn-primary" onclick="submitFamilyFundReconciliation(' + recorded + ', \'' + category + '\')">記錄對帳結果</button>' +
+    modalCancelButton());
+}
+
+function submitFamilyFundReconciliation(recorded, category) {
+  const actual = parseAnyInt(document.getElementById('reconcileActual').value);
+  if (actual === null) { showFieldError('reconcileActual', '請輸入實際餘額（可以是 0 或負數，但不能有文字）'); return; }
+  if (!ensureReconciliationWritable()) return;
+  const diff = actual - recorded;
+  const wantsAdjustment = diff !== 0 && document.getElementById('reconcileCreateAdjustment') && document.getElementById('reconcileCreateAdjustment').checked;
+  let adjustmentRecordId = null;
+  if (wantsAdjustment) {
+    let adjustment;
+    if (diff < 0) {
+      adjustment = addRecord('transactions', {
+        date: todayLocalDate(),
+        amount: Math.abs(diff),
+        note: '對帳調整（' + currentYearMonth() + '）',
+        category,
+        scope: 'family',
+        paymentMethod: 'cash',
+        accountId: null,
+        cardId: null,
+        billingMonth: null,
+        cardStatus: null
+      });
+    } else {
+      adjustment = addRecord('familyFundDeposits', {
+        date: todayLocalDate(),
+        amount: diff,
+        depositedBy: '對帳調整',
+        category,
+        fromAccountId: null
+      });
+    }
+    if (!adjustment) { showToast('儲存失敗（可能處於鎖定狀態或儲存空間問題），請到備份頁確認'); return; }
+    adjustmentRecordId = adjustment.id;
+  }
+  const saved = addRecord('monthlyReconciliation', {
+    date: todayLocalDate(),
+    module: 'familyFund',
+    refId: category,
+    recordedBalance: recorded,
+    actualBalance: actual,
+    diff,
+    adjustmentRecordId
+  });
+  if (!saved) { showToast('儲存失敗（可能處於鎖定狀態或儲存空間問題），請到備份頁確認'); return; }
+  closeModal();
+  renderKeepScroll();
+  revealRecord(familyCategoryRecordId(category));
+  showToast(diff === 0 ? '對帳完成，沒有落差' : ('已記錄對帳結果' + (wantsAdjustment ? '，並建立調整' : '')));
+}
+
+function openReconcileCard(cardId) {
+  const card = state.data.creditCards.find(c => c.id === cardId);
+  if (!card) { showToast('找不到這張信用卡'); return; }
+  const recorded = creditCardTotalOwed(cardId);
+  openModal('對帳：' + card.name,
+    '<div class="muted">app 算出的總欠款</div><div class="big">' + money(recorded) + '</div>' +
+    '<label>實際總欠款（信用卡 App 目前顯示的未繳總額）</label>' +
+    '<input id="reconcileActual" type="number" oninput="handleReconcileDiffInput(' + recorded + ', { allowAdjustment: false })">' +
+    '<div id="reconcileDiffArea"></div>' +
+    '<button class="btn-primary" onclick="submitCardReconciliation(\'' + cardId + '\', ' + recorded + ')">記錄對帳結果</button>' +
+    modalCancelButton());
+}
+
+function submitCardReconciliation(cardId, recorded) {
+  const actual = parseAnyInt(document.getElementById('reconcileActual').value);
+  if (actual === null) { showFieldError('reconcileActual', '請輸入實際總欠款（可以是 0，但不能有文字）'); return; }
+  if (!ensureReconciliationWritable()) return;
+  const diff = actual - recorded;
+  const saved = addRecord('monthlyReconciliation', {
+    date: todayLocalDate(),
+    module: 'creditCard',
+    refId: cardId,
+    recordedBalance: recorded,
+    actualBalance: actual,
+    diff,
+    adjustmentRecordId: null
+  });
+  if (!saved) { showToast('儲存失敗（可能處於鎖定狀態或儲存空間問題），請到備份頁確認'); return; }
+  closeModal();
+  renderKeepScroll();
+  revealRecord(cardId);
+  showToast(diff === 0 ? '對帳完成，沒有落差' : '已記錄對帳結果，記得回頭核對消費記錄');
+}
+
+// ===================== 4. UI：銀行帳戶 =====================
+function renderBankAccounts() {
+  const bankOptions = state.data.banks.map(b => '<option value="' + b.id + '">' + escapeHtml(b.name) + '</option>').join('');
+
+  const accountsHtml = state.data.bankAccounts.map(a => {
+    const balance = bankAccountBalance(a.id);
+    const bank = state.data.banks.find(b => b.id === a.bankId);
+    const movementsHtml = filterByListMonth('accountMovements', state.data.accountManualMovements.filter(m => m.accountId === a.id))
+      .sort((x, y) => y.date.localeCompare(x.date))
+      .map(m => (
+        '<li data-record-id="' + m.id + '"><div class="row"><span>' + escapeHtml(m.direction) + (m.note ? '：' + escapeHtml(m.note) : '') + '</span><span>' + money(m.amount) + '</span></div>' +
+        '<div class="muted">' + m.date + '</div>' +
+        '<div class="action-row"><button class="btn-ghost" onclick="openMovementForm(\'' + a.id + '\', \'' + m.id + '\')">編輯</button>' +
+        '<button class="btn-danger" onclick="handleDeleteMovement(\'' + m.id + '\')">刪除</button></div></li>'
+      )).join('');
+    return (
+      '<div class="card" data-record-id="' + a.id + '">' +
+      '<div class="account-balance-row"><b>' + escapeHtml(a.name) + '</b>' +
+      '<span class="big' + (balance < 0 ? ' neg' : '') + '">' + money(balance) + '</span></div>' +
+      '<div class="muted">' + (bank ? escapeHtml(bank.name) : '未指定銀行') + ' · ' + escapeHtml(a.accountType) + '</div>' +
+      renderLastReconciliation('bankAccount', a.id) +
+      renderReconciliationHistory('bankAccount', a.id) +
+      '<button class="btn-ghost" onclick="handleAddMovement(\'' + a.id + '\')">手動存入/提出</button> ' +
+      '<button class="btn-ghost" onclick="openReconcileBankAccount(\'' + a.id + '\')">對帳</button> ' +
+      '<button class="btn-danger" onclick="handleDeleteAccount(\'' + a.id + '\')">刪除帳戶</button>' +
+      '<details class="tucked" open><summary>異動記錄</summary><ul class="list">' + (movementsHtml || '<li class="muted">' + emptyListMessage('accountMovements', '異動記錄') + '</li>') + '</ul></details>' +
+      '</div>'
+    );
+  }).join('');
+
+  return (
+    '<div class="page-summary-row"><h2>個人銀行帳戶</h2><span class="big">總資產 ' + money(bankAccountsTotalAssets()) + '</span></div>' +
+    '<div class="card"><h2>異動記錄篩選</h2>' + renderListFilterBar('accountMovements') + '</div>' +
+    accountsHtml +
+    '<div class="card"><h2>新增帳戶</h2>' +
+    '<label>帳戶名稱</label><input id="newAccName" placeholder="例如：國泰儲蓄">' +
+    '<label>所屬銀行</label><select id="newAccBank"><option value="">（不指定）</option>' + bankOptions + '</select>' +
+    '<label>清單沒有？新增所屬銀行（選填）</label><input id="newAccBankName" placeholder="例如：國泰、玉山、中信">' +
+    '<div class="muted">這裡新增的銀行會同步出現在信用卡的「發卡銀行」清單。</div>' +
+    '<label>帳戶類型</label><select id="newAccType"><option>儲蓄</option><option>股票</option><option>其他</option></select>' +
+    '<label>期初餘額</label><input id="newAccOpening" type="number" value="0">' +
+    '<button class="btn-primary" onclick="handleAddAccount()">新增帳戶</button></div>'
+  );
+}
+
+function findOrCreateBankByName(name) {
+  const cleanName = String(name || '').trim();
+  if (!cleanName) return null;
+  const existingBank = state.data.banks.find(b => b.name === cleanName);
+  return existingBank || addRecord('banks', { name: cleanName });
+}
+
+function handleAddAccount() {
+  const name = document.getElementById('newAccName').value.trim();
+  let bankId = document.getElementById('newAccBank').value || null;
+  const newBankName = document.getElementById('newAccBankName').value.trim();
+  const accountType = document.getElementById('newAccType').value;
+  const openingBalance = parseAnyInt(document.getElementById('newAccOpening').value);
+  if (!name) { showFieldError('newAccName', '請輸入帳戶名稱'); return; }
+  if (openingBalance === null) { showFieldError('newAccOpening', '期初餘額必須是整數（可以是 0 或負數，但不能有文字）'); return; }
+  if (newBankName) {
+    const savedBank = findOrCreateBankByName(newBankName);
+    if (!savedBank) { showToast('新增銀行失敗（可能處於鎖定狀態或儲存空間問題），請到備份頁確認'); return; }
+    bankId = savedBank.id;
+  }
+  const saved = addRecord('bankAccounts', { name, bankId, accountType, openingBalance });
+  render();
+  revealRecord(saved && saved.id);
+}
+
+function handleDeleteAccount(id) {
+  const referenced =
+    state.data.transactions.some(t => t.accountId === id) ||
+    state.data.familyFundDeposits.some(d => d.fromAccountId === id) ||
+    state.data.familyFundReimbursements.some(r => r.toAccountId === id) ||
+    state.data.creditCardPayments.some(p => p.fromAccountId === id) ||
+    state.data.accountManualMovements.some(m => m.accountId === id);
+  if (referenced) { alert('這個帳戶還有記錄在使用，無法刪除。'); return; }
+  openConfirmModal('刪除帳戶', '確定刪除這個帳戶？', () => {
+    deleteWithFeedback('bankAccounts', id, '已刪除帳戶');
+  }, '刪除');
+}
+
+function movementFieldsHtml(record) {
+  record = record || {};
+  const dir = record.direction || '存入';
+  return (
+    '<label>方向</label><select id="mvDir"><option value="存入"' + optSelected(dir, '存入') + '>存入</option><option value="提出"' + optSelected(dir, '提出') + '>提出</option></select>' +
+    '<label>金額</label><input id="mvAmount" type="number" min="1" inputmode="numeric" value="' + inputVal(record.amount) + '">' +
+    '<label>日期</label><input id="mvDate" type="date" value="' + (record.date || todayLocalDate()) + '">' +
+    '<label>備注（選填）</label><input id="mvNote" value="' + inputVal(record.note) + '">'
+  );
+}
+
+function readMovementFields() {
+  const amount = parsePositiveInt(document.getElementById('mvAmount').value);
+  if (amount === null) { showFieldError('mvAmount', '金額必須是正整數'); return null; }
+  const date = document.getElementById('mvDate').value;
+  if (!date) { showFieldError('mvDate', '請選擇日期'); return null; }
+  return { date, amount, direction: document.getElementById('mvDir').value, note: document.getElementById('mvNote').value.trim() };
+}
+
+function openMovementForm(accountId, editId) {
+  const acc = state.data.bankAccounts.find(a => a.id === accountId);
+  if (!acc) { showToast('找不到這個帳戶'); return; }
+  const editRec = editId ? state.data.accountManualMovements.find(m => m.id === editId) : null;
+  if (editId && !editRec) { showToast('找不到這筆異動'); return; }
+  openModal(editId ? '編輯異動' : '手動存入 / 提出',
+    '<div class="muted">帳戶：' + escapeHtml(acc.name) + '</div>' +
+    movementFieldsHtml(editRec) +
+    '<button class="btn-primary" onclick="submitMovement(\'' + accountId + '\'' + (editId ? ', \'' + editId + '\'' : '') + ')">儲存</button>' +
+    modalCancelButton());
+}
+
+function submitMovement(accountId, editId) {
+  const original = editId ? state.data.accountManualMovements.find(m => m.id === editId) : null;
+  const oldDate = original ? original.date : null;
+  const fields = readMovementFields();
+  if (!fields) return;
+  const saved = editId
+    ? updateRecord('accountManualMovements', editId, Object.assign({ accountId }, fields))
+    : addRecord('accountManualMovements', Object.assign({ accountId }, fields));
+  if (!saved) { showToast('儲存失敗（可能處於鎖定狀態或儲存空間問題），請到備份頁確認'); return; }
+  closeModal();
+  renderKeepScroll();
+  revealRecord(saved.id);
+  const msg = (editId ? '已更新：' : '') + fields.direction + ' ' + money(fields.amount);
+  showToast(editId ? editSuccessMessage('accountMovements', oldDate, fields.date, msg) : msg);
+}
+
+function handleAddMovement(accountId) {
+  openMovementForm(accountId);
+}
+
+function handleDeleteMovement(id) {
+  const m = state.data.accountManualMovements.find(x => x.id === id);
+  const detail = m ? (m.date + ' ' + m.direction + ' ' + money(m.amount) + (m.note ? '：' + m.note : '')) : '這筆異動記錄';
+  openConfirmModal('刪除異動', '確定刪除「' + detail + '」？刪除後帳戶餘額會重新計算。', () => {
+    deleteWithFeedback('accountManualMovements', id, '已刪除異動');
+  }, '刪除');
+}
+
+// ===================== 5. UI：信用卡 =====================
+let creditCardViewPeriod = null;
+
+function renderCreditCards() {
+  const bankOptions = state.data.banks.map(b => '<option value="' + b.id + '">' + escapeHtml(b.name) + '</option>').join('');
+  const accountOptions = state.data.bankAccounts.map(a => '<option value="' + a.id + '">' + escapeHtml(a.name) + '</option>').join('');
+
+  const cardsHtml = state.data.creditCards.map(c => {
+    const bank = state.data.banks.find(b => b.id === c.bankId);
+    const owed = creditCardTotalOwed(c.id);
+    const installmentPrincipalTotal = creditCardInstallmentPrincipal(c.id);
+    const period = creditCardViewPeriod || currentBillingPeriod(c);
+    const due = creditCardDueForPeriod(c.id, period);
+    const paid = sum(state.data.creditCardPayments.filter(p => p.cardId === c.id), 'amount');
+    const avail = creditCardAvailableCredit(c.id);
+    const reminder = cardPaymentReminder(c);
+    const paymentsHtml = filterByListMonth('creditCardPayments', state.data.creditCardPayments.filter(p => p.cardId === c.id))
+      .sort((x, y) => y.date.localeCompare(x.date))
+      .map(p => {
+        const account = state.data.bankAccounts.find(a => a.id === p.fromAccountId);
+        return '<li data-record-id="' + p.id + '"><div class="row"><span>' + (account ? escapeHtml(account.name) : '未指定帳戶') + (p.note ? '：' + escapeHtml(p.note) : '') + '</span><span>' + money(p.amount) + '</span></div>' +
+          '<div class="muted">' + p.date + '</div>' +
+          '<div class="action-row"><button class="btn-ghost" onclick="openPaymentForm(\'' + c.id + '\', \'' + p.id + '\')">編輯</button>' +
+          '<button class="btn-danger" onclick="handleDeletePayment(\'' + p.id + '\')">刪除</button></div></li>';
+      }).join('');
+    const installmentsHtml = c.installments.map(inst => {
+      const remaining = installmentRemainingPrincipal(inst);
+      const remainingPeriods = Math.max(0, inst.totalPeriods - inst.paidPeriods);
+      const done = inst.paidPeriods >= inst.totalPeriods;
+      return '<li data-record-id="' + inst.id + '"><div><b>' + (escapeHtml(inst.note) || '分期') + '</b></div>' +
+        '<div class="muted">每期 ' + money(inst.perInstallment) + '</div>' +
+        '<div class="muted">已繳 ' + inst.paidPeriods + ' / ' + inst.totalPeriods + ' 期' + (done ? '（已結清）' : '，剩餘 ' + remainingPeriods + ' 期') + '</div>' +
+        (done ? '' : '<div class="muted">剩餘本金 ' + money(remaining) + '</div>') +
+        '<div class="action-row">' +
+        (done ? '' : '<button class="btn-ghost" onclick="handleAdvanceInstallment(\'' + c.id + '\', \'' + inst.id + '\')">標記已繳一期</button>') +
+        '<button class="btn-ghost" onclick="openInstallmentForm(\'' + c.id + '\', \'' + inst.id + '\')">編輯</button>' +
+        '<button class="btn-danger" onclick="handleDeleteInstallment(\'' + c.id + '\', \'' + inst.id + '\')">刪除</button>' +
+        '</div></li>';
+    }).join('');
+    const alertHtml = reminder.level === 'none' ? '' :
+      '<div class="' + (reminder.level === 'overdue' ? 'alert-overdue' : 'alert-due') + '">' +
+      (reminder.level === 'overdue' ? '已逾期' : '即將到期') + '：' +
+      formatDateShort(reminder.dueDate) + ' 前要處理，截至本期尚未還款 ' + money(reminder.amount) +
+      '</div>';
+    return (
+      '<div class="card" data-record-id="' + c.id + '">' +
+      '<div class="row"><b>' + escapeHtml(c.name) + '</b><span class="muted">' + (bank ? escapeHtml(bank.name) : '') + '</span></div>' +
+      alertHtml +
+      '<div class="metric-row"><span>總欠款</span><span class="big metric-value">' + money(owed) + '</span></div>' +
+      (installmentPrincipalTotal > 0 ? '<div class="muted">含分期剩餘本金 ' + money(installmentPrincipalTotal) + '</div>' : '') +
+      '<div class="metric-row"><span>本期應繳</span><span class="metric-value">' + money(due) + '</span></div>' +
+      '<div class="metric-row"><span>累計已還款</span><span class="metric-value">' + money(paid) + '</span></div>' +
+      '<div class="metric-row"><span>剩餘額度</span><span class="metric-value">' + money(avail) + '</span></div>' +
+      '<div class="muted">查看帳期 ' + period + ' · 結帳日 ' + c.statementDay + ' 號 · 繳款日 ' + c.dueDay + ' 號</div>' +
+      renderLastReconciliation('creditCard', c.id) +
+      renderReconciliationHistory('creditCard', c.id) +
+      '<button class="btn-ghost" onclick="handleAddPayment(\'' + c.id + '\')">新增還款</button> ' +
+      '<button class="btn-ghost" onclick="openReconcileCard(\'' + c.id + '\')">對帳</button> ' +
+      '<button class="btn-danger" onclick="handleDeleteCard(\'' + c.id + '\')">刪除卡片</button>' +
+      '<details class="tucked" open><summary>分期付款（' + c.installments.length + '）</summary>' +
+      '<div class="muted">「標記已繳一期」只更新分期進度，不會新增信用卡還款紀錄，也不會扣任何銀行帳戶。</div>' +
+      '<ul class="list">' + (installmentsHtml || '<li class="muted">尚無分期，先新增第一筆</li>') + '</ul>' +
+      '<button class="btn-ghost" onclick="openInstallmentForm(\'' + c.id + '\')">新增分期</button></details>' +
+      '<details class="tucked" open><summary>還款記錄</summary><ul class="list">' + (paymentsHtml || '<li class="muted">' + emptyListMessage('creditCardPayments', '還款記錄') + '</li>') + '</ul></details>' +
+      '</div>'
+    );
+  }).join('') || '<div class="card"><div class="muted">尚無信用卡，先新增第一張</div></div>';
+
+  return (
+    '<h2>信用卡</h2>' +
+    '<h2 class="section-title">帳期與還款</h2>' +
+    '<div class="card">' +
+      '<label>查看帳期（留空＝各卡目前帳期）</label>' +
+      '<input id="creditCardViewPeriod" type="month" value="' + (creditCardViewPeriod || '') + '" onchange="handleCreditCardPeriodChange()">' +
+      '<button class="btn-ghost" onclick="creditCardViewPeriod=null;render()">使用各卡目前帳期</button>' +
+      '<div class="muted" style="margin-top:8px">提醒依照「截至本期累計應繳 − 累計已還款」推算；如果已繳信用卡但沒有在這裡記錄還款，可能會誤報逾期。</div>' +
+      '<h2 style="margin-top:14px">還款記錄篩選</h2>' + renderListFilterBar('creditCardPayments') +
+    '</div>' +
+    '<h2 class="section-title">信用卡總覽</h2>' + cardsHtml +
+    '<h2 class="section-title">新增卡片</h2>' +
+    '<div class="card"><h2>新增信用卡</h2>' +
+    '<label>卡片名稱</label><input id="newCardName">' +
+    '<label>發卡銀行（信用卡所屬銀行，不是還款帳戶）</label><select id="newCardBank"><option value="">（不指定）</option>' + bankOptions + '</select>' +
+    '<label>清單沒有？新增發卡銀行（選填）</label><input id="newCardBankName" placeholder="例如：玉山、匯豐、樂天">' +
+    '<div class="muted">若你只新增了帳戶但沒有設定所屬銀行，這裡不會自動出現；請在這裡新增發卡銀行，或回帳戶頁補上所屬銀行。</div>' +
+    '<label>額度</label><input id="newCardLimit" type="number">' +
+    '<label>結帳日（幾號）</label><input id="newCardStatementDay" type="number" min="1" max="31">' +
+    '<label>繳款到期日（幾號）</label><input id="newCardDueDay" type="number" min="1" max="31">' +
+    '<button class="btn-primary" onclick="handleAddCard()">新增卡片</button></div>' +
+    (accountOptions ? '' : '<p class="muted">沒有個人銀行帳戶也可以新增信用卡；記錄還款時可選「不指定帳戶」，只減少信用卡欠款，不扣個人帳戶。</p>')
+  );
+}
+
+function handleCreditCardPeriodChange() {
+  const value = document.getElementById('creditCardViewPeriod').value;
+  creditCardViewPeriod = value || null;
+  render();
+}
+
+function handleAddCard() {
+  const name = document.getElementById('newCardName').value.trim();
+  let bankId = document.getElementById('newCardBank').value || null;
+  const newBankName = document.getElementById('newCardBankName').value.trim();
+  const creditLimit = parsePositiveInt(document.getElementById('newCardLimit').value);
+  const statementDay = parsePositiveInt(document.getElementById('newCardStatementDay').value);
+  const dueDay = parsePositiveInt(document.getElementById('newCardDueDay').value);
+  if (!name) { showFieldError('newCardName', '請輸入卡片名稱'); return; }
+  if (creditLimit === null) { showFieldError('newCardLimit', '額度必須是正整數'); return; }
+  if (statementDay === null || statementDay > 31) { showFieldError('newCardStatementDay', '結帳日要是 1-31 之間的數字'); return; }
+  if (dueDay === null || dueDay > 31) { showFieldError('newCardDueDay', '繳款日要是 1-31 之間的數字'); return; }
+  if (newBankName) {
+    const savedBank = findOrCreateBankByName(newBankName);
+    if (!savedBank) { showToast('新增發卡銀行失敗（可能處於鎖定狀態或儲存空間問題），請到備份頁確認'); return; }
+    bankId = savedBank.id;
+  }
+  const saved = addRecord('creditCards', { name, bankId, creditLimit, statementDay, dueDay, installments: [] });
+  render();
+  revealRecord(saved && saved.id);
+}
+
+function handleDeleteCard(id) {
+  const referenced =
+    state.data.transactions.some(t => t.cardId === id) ||
+    state.data.creditCardPayments.some(p => p.cardId === id) ||
+    state.data.familyFundReimbursements.some(r => r.cardId === id);
+  if (referenced) { alert('這張卡還有消費、還款或補款關聯記錄，無法刪除。'); return; }
+  openConfirmModal('刪除信用卡', '確定刪除這張卡？', () => {
+    deleteWithFeedback('creditCards', id, '已刪除信用卡');
+  }, '刪除');
+}
+
+function paymentFieldsHtml(record) {
+  record = record || {};
+  const accOptions =
+    '<option value=""' + (record.fromAccountId == null ? ' selected' : '') + '>不指定帳戶（只記錄還款，不扣帳戶）</option>' +
+    state.data.bankAccounts.map(a => '<option value="' + a.id + '"' + optSelected(record.fromAccountId, a.id) + '>' + escapeHtml(a.name) + '</option>').join('');
+  return (
+    '<label>金額</label><input id="payAmount" type="number" min="1" inputmode="numeric" value="' + inputVal(record.amount) + '">' +
+    '<label>日期</label><input id="payDate" type="date" value="' + (record.date || todayLocalDate()) + '">' +
+    '<label>付款來源帳戶（選填）</label><select id="payAccount">' + accOptions + '</select>' +
+    '<div class="muted">若沒有要追蹤扣款帳戶，可選不指定帳戶；這筆只會減少信用卡欠款。</div>' +
+    '<label>備注（選填）</label><input id="payNote" value="' + inputVal(record.note) + '">'
+  );
+}
+
+function readPaymentFields() {
+  const amount = parsePositiveInt(document.getElementById('payAmount').value);
+  if (amount === null) { showFieldError('payAmount', '金額必須是正整數'); return null; }
+  const date = document.getElementById('payDate').value;
+  if (!date) { showFieldError('payDate', '請選擇日期'); return null; }
+  const fromAccountId = document.getElementById('payAccount').value || null;
+  return { date, amount, fromAccountId, note: document.getElementById('payNote').value.trim() };
+}
+
+function openPaymentForm(cardId, editId) {
+  const card = state.data.creditCards.find(c => c.id === cardId);
+  if (!card) { showToast('找不到這張信用卡'); return; }
+  const editRec = editId ? state.data.creditCardPayments.find(p => p.id === editId) : null;
+  if (editId && !editRec) { showToast('找不到這筆還款'); return; }
+  openModal(editId ? '編輯還款' : '信用卡還款',
+    '<div class="muted">卡片：' + escapeHtml(card.name) + '</div>' +
+    paymentFieldsHtml(editRec) +
+    '<button class="btn-primary" onclick="submitPayment(\'' + cardId + '\'' + (editId ? ', \'' + editId + '\'' : '') + ')">儲存</button>' +
+    modalCancelButton());
+}
+
+function submitPayment(cardId, editId) {
+  const original = editId ? state.data.creditCardPayments.find(p => p.id === editId) : null;
+  const oldDate = original ? original.date : null;
+  const fields = readPaymentFields();
+  if (!fields) return;
+  const owedBeforeThisPayment = editId ? null : creditCardTotalOwed(cardId);
+  const saved = editId
+    ? updateRecord('creditCardPayments', editId, Object.assign({ cardId }, fields))
+    : addRecord('creditCardPayments', Object.assign({ cardId }, fields));
+  if (!saved) { showToast('儲存失敗（可能處於鎖定狀態或儲存空間問題），請到備份頁確認'); return; }
+  closeModal();
+  renderKeepScroll();
+  revealRecord(saved.id);
+  const remaining = creditCardTotalOwed(cardId);
+  if (editId) {
+    showToast(editSuccessMessage('creditCardPayments', oldDate, fields.date, '已更新還款 ' + money(fields.amount) + '，剩餘欠款 ' + money(remaining)));
+  } else {
+    showToast('已還款 ' + money(fields.amount) + '，剩餘欠款 ' + money(remaining) + (fields.amount > owedBeforeThisPayment ? '（含溢繳）' : ''));
+  }
+}
+
+function handleDeletePayment(id) {
+  const p = state.data.creditCardPayments.find(x => x.id === id);
+  const account = p ? state.data.bankAccounts.find(a => a.id === p.fromAccountId) : null;
+  const source = p ? (account ? '，來源帳戶：' + account.name : '，來源帳戶：未指定') : '';
+  const detail = p ? (p.date + ' ' + money(p.amount) + source + (p.note ? '：' + p.note : '')) : '這筆還款記錄';
+  openConfirmModal('刪除還款', '確定刪除「' + detail + '」？刪除後信用卡欠款會增加，付款帳戶餘額會回補，也可能重新出現到期提醒。', () => {
+    deleteWithFeedback('creditCardPayments', id, '已刪除還款');
+  }, '刪除');
+}
+
+function handleAddPayment(cardId) {
+  openPaymentForm(cardId);
+}
+
+function installmentFieldsHtml(record) {
+  record = record || {};
+  return (
+    '<label>項目備注（選填，例如：冰箱、筆電）</label><input id="instNote" value="' + inputVal(record.note) + '">' +
+    '<label>分期總額</label><input id="instTotalAmount" type="number" min="1" value="' + inputVal(record.totalAmount) + '" oninput="handleInstallmentAmountInput()">' +
+    '<label>總期數</label><input id="instTotalPeriods" type="number" min="1" value="' + inputVal(record.totalPeriods) + '" oninput="handleInstallmentAmountInput()">' +
+    '<label>每期金額（可手動調整，銀行分期常有尾差）</label><input id="instPerInstallment" type="number" min="1" value="' + inputVal(record.perInstallment) + '" data-user-edited="' + (record.perInstallment ? '1' : '0') + '" oninput="this.dataset.userEdited=\'1\'">' +
+    '<label>已還期數（新登記通常是 0；補登已在繳的分期，可填目前實際還了幾期）</label><input id="instPaidPeriods" type="number" min="0" value="' + inputVal(record.paidPeriods != null ? record.paidPeriods : 0) + '">'
+  );
+}
+
+function handleInstallmentAmountInput() {
+  const perEl = document.getElementById('instPerInstallment');
+  if (!perEl || perEl.dataset.userEdited === '1') return;
+  const totalAmount = parsePositiveInt(document.getElementById('instTotalAmount').value);
+  const totalPeriods = parsePositiveInt(document.getElementById('instTotalPeriods').value);
+  if (totalAmount === null || totalPeriods === null) return;
+  perEl.value = Math.ceil(totalAmount / totalPeriods);
+}
+
+function readInstallmentFields() {
+  const totalAmount = parsePositiveInt(document.getElementById('instTotalAmount').value);
+  if (totalAmount === null) { showFieldError('instTotalAmount', '分期總額必須是正整數'); return null; }
+  const totalPeriods = parsePositiveInt(document.getElementById('instTotalPeriods').value);
+  if (totalPeriods === null) { showFieldError('instTotalPeriods', '總期數必須是正整數'); return null; }
+  const perInstallment = parsePositiveInt(document.getElementById('instPerInstallment').value);
+  if (perInstallment === null) { showFieldError('instPerInstallment', '每期金額必須是正整數'); return null; }
+  const paidPeriods = parseAnyInt(document.getElementById('instPaidPeriods').value);
+  if (paidPeriods === null || paidPeriods < 0) { showFieldError('instPaidPeriods', '已還期數必須是 0 或正整數'); return null; }
+  if (paidPeriods > totalPeriods) { showFieldError('instPaidPeriods', '已還期數不能超過總期數'); return null; }
+  return { note: document.getElementById('instNote').value.trim(), totalAmount, totalPeriods, perInstallment, paidPeriods };
+}
+
+function openInstallmentForm(cardId, editId) {
+  const card = state.data.creditCards.find(c => c.id === cardId);
+  if (!card) { showToast('找不到這張信用卡'); return; }
+  const editRec = editId ? card.installments.find(i => i.id === editId) : null;
+  if (editId && !editRec) { showToast('找不到這筆分期'); return; }
+  openModal(editId ? '編輯分期' : '新增分期',
+    '<div class="muted">卡片：' + escapeHtml(card.name) + '</div>' +
+    installmentFieldsHtml(editRec) +
+    '<button class="btn-primary" onclick="submitInstallment(\'' + cardId + '\'' + (editId ? ', \'' + editId + '\'' : '') + ')">儲存</button>' +
+    modalCancelButton());
+}
+
+function submitInstallment(cardId, editId) {
+  const fields = readInstallmentFields();
+  if (!fields) return;
+  const saved = editId
+    ? updateInstallment(cardId, editId, fields)
+    : addInstallment(cardId, fields);
+  if (!saved) { showToast('儲存失敗（可能處於鎖定狀態或儲存空間問題），請到備份頁確認'); return; }
+  closeModal();
+  renderKeepScroll();
+  revealRecord(saved.id);
+  showToast(editId ? '已更新分期' : '已新增分期');
+}
+
+function handleDeleteInstallment(cardId, installmentId) {
+  openConfirmModal('刪除分期', '確定刪除這筆分期記錄？刪除後，這筆分期剩餘本金會從信用卡總欠款中移除，但不會影響已存在的還款紀錄。', () => {
+    const deleted = deleteInstallment(cardId, installmentId);
+    if (!deleted) { showToast('刪除失敗（可能處於鎖定狀態或記錄已不存在），請到備份頁確認'); return; }
+    renderKeepScroll();
+    showToast('已刪除分期');
+  }, '刪除');
+}
+
+function handleAdvanceInstallment(cardId, installmentId) {
+  const card = state.data.creditCards.find(c => c.id === cardId);
+  const inst = card && card.installments.find(i => i.id === installmentId);
+  if (!inst || inst.paidPeriods >= inst.totalPeriods) return;
+  const updated = updateInstallment(cardId, installmentId, { paidPeriods: inst.paidPeriods + 1 });
+  if (!updated) { showToast('儲存失敗（可能處於鎖定狀態或儲存空間問題），請到備份頁確認'); return; }
+  renderKeepScroll();
+  revealRecord(installmentId);
+  showToast('已更新分期進度' + (updated.paidPeriods >= updated.totalPeriods ? '，這筆分期已結清' : ''));
+}
+
+// ===================== 6. UI：個人記帳 =====================
+function personalCategoryOptionsHtml(selected) {
+  const names = state.data.categoryKeywords.map(c => c.category);
+  if (!names.includes('其他')) names.push('其他');
+  if (selected && !names.includes(selected)) names.push(selected);
+  return names.map(c => '<option' + optSelected(selected, c) + '>' + escapeHtml(c) + '</option>').join('');
+}
+
+function transactionFieldsHtml(scope, idPrefix, record, showBillingMonth) {
+  record = record || {};
+  const pm = record.paymentMethod || 'cash';
+  const cardOptions = state.data.creditCards.map(c => '<option value="' + c.id + '"' + optSelected(record.cardId, c.id) + '>' + escapeHtml(c.name) + '</option>').join('');
+  const accountOptions = state.data.bankAccounts.map(a => '<option value="' + a.id + '"' + optSelected(record.accountId, a.id) + '>' + escapeHtml(a.name) + '</option>').join('');
+  const categoryField = scope === 'family'
+    ? '<label>類別</label><select id="' + idPrefix + 'Category">' + FAMILY_CATEGORIES.map(c => '<option' + optSelected(record.category, c) + '>' + c + '</option>').join('') + '</select>'
+    : '<label>類別（會依備注自動建議，也可以手動選）</label><select id="' + idPrefix + 'Category">' + personalCategoryOptionsHtml(record.category || '其他') + '</select>';
+
+  return (
+    '<label>金額</label><input id="' + idPrefix + 'Amount" type="number" min="1" value="' + inputVal(record.amount) + '">' +
+    '<label>日期</label><input id="' + idPrefix + 'Date" type="date" value="' + (record.date || todayLocalDate()) + '">' +
+    '<label>備注</label><input id="' + idPrefix + 'Note" value="' + inputVal(record.note) + '" oninput="handleNoteInput(\'' + scope + '\', \'' + idPrefix + '\')">' +
+    categoryField +
+    '<label>支付方式</label><select id="' + idPrefix + 'PaymentMethod" onchange="handlePaymentMethodChange(\'' + idPrefix + '\')">' +
+      '<option value="cash"' + optSelected(pm, 'cash') + '>現金</option><option value="bankAccount"' + optSelected(pm, 'bankAccount') + '>銀行帳戶</option><option value="creditCard"' + optSelected(pm, 'creditCard') + '>信用卡</option>' +
+    '</select>' +
+    '<div id="' + idPrefix + 'PaymentHint" class="muted status-note" data-scope="' + scope + '"></div>' +
+    '<div id="' + idPrefix + 'AccountField" style="display:none"><label>銀行帳戶</label><select id="' + idPrefix + 'AccountId">' + accountOptions + '</select></div>' +
+    '<div id="' + idPrefix + 'CardField" style="display:none">' +
+      '<label>信用卡</label><select id="' + idPrefix + 'CardId">' + cardOptions + '</select>' +
+      '<label>帳務狀態</label><select id="' + idPrefix + 'CardStatus">' + CARD_STATUSES.map(s => '<option' + optSelected(record.cardStatus || '未結帳', s) + '>' + s + '</option>').join('') + '</select>' +
+      (showBillingMonth ? '<label>帳單月份（留空＝依日期自動算）</label><input id="' + idPrefix + 'BillingMonth" type="month" value="' + (record.billingMonth || '') + '"><div class="muted">若銀行實際入帳月份不同，可手動指定。</div>' : '') +
+    '</div>'
+  );
+}
+
+function renderTransactionForm(scope, onSavedFnName) {
+  return (
+    '<div class="card"><h2>新增' + (scope === 'family' ? '家庭' : '個人') + '支出</h2>' +
+    transactionFieldsHtml(scope, 'tx') +
+    '<button class="btn-primary" onclick="' + onSavedFnName + '(\'' + scope + '\')">儲存</button>' +
+    '</div>'
+  );
+}
+
+function handleNoteInput(scope, idPrefix = 'tx') {
+  if (scope !== 'personal') return;
+  const note = document.getElementById(idPrefix + 'Note').value;
+  if (note.trim()) document.getElementById(idPrefix + 'Category').value = suggestCategory(note);
+}
+
+function handlePaymentMethodChange(idPrefix = 'tx', scopeOverride) {
+  const method = document.getElementById(idPrefix + 'PaymentMethod').value;
+  const scopeSelect = document.getElementById('qaScope');
+  const hint = document.getElementById(idPrefix + 'PaymentHint');
+  const scope = scopeOverride || (hint && hint.dataset.scope) || (idPrefix === 'qa' && scopeSelect ? scopeSelect.value : (idPrefix === 'edit' ? null : currentView));
+  document.getElementById(idPrefix + 'AccountField').style.display = method === 'bankAccount' ? 'block' : 'none';
+  document.getElementById(idPrefix + 'CardField').style.display = method === 'creditCard' ? 'block' : 'none';
+  if (hint) {
+    if (scope === 'family' && method === 'creditCard') {
+      hint.textContent = '這筆家庭支出會形成「已刷卡待補款」，之後可從家庭基金補款到個人帳戶再繳信用卡。';
+    } else if (scope === 'family' && method === 'bankAccount') {
+      hint.textContent = '這筆會直接扣家庭基金現金餘額，也會影響選到的個人帳戶餘額。';
+    } else if (method === 'creditCard') {
+      hint.textContent = '這筆會增加信用卡欠款，還款時再從帳戶扣款。';
+    } else {
+      hint.textContent = '';
+    }
+    hint.style.display = hint.textContent ? 'block' : 'none';
+  }
+}
+
+function transactionFormError(idPrefix, fieldSuffix, msg) {
+  const id = idPrefix + fieldSuffix;
+  if (idPrefix === 'qa' || idPrefix === 'edit') {
+    showFieldError(id, msg);
+  } else {
+    showFieldError(id, msg);
+  }
+}
+
+function readTransactionFields(scope, idPrefix) {
+  const amount = parsePositiveInt(document.getElementById(idPrefix + 'Amount').value);
+  const date = document.getElementById(idPrefix + 'Date').value;
+  const note = document.getElementById(idPrefix + 'Note').value.trim();
+  const category = document.getElementById(idPrefix + 'Category').value;
+  const paymentMethod = document.getElementById(idPrefix + 'PaymentMethod').value;
+  if (amount === null) { transactionFormError(idPrefix, 'Amount', '金額必須是正整數'); return null; }
+  if (!date) { transactionFormError(idPrefix, 'Date', '請選擇日期'); return null; }
+  const record = { date, amount, note, category, scope, paymentMethod, accountId: null, cardId: null, billingMonth: null, cardStatus: null };
+  if (paymentMethod === 'bankAccount') {
+    const accountId = document.getElementById(idPrefix + 'AccountId').value;
+    if (!accountId) { transactionFormError(idPrefix, 'AccountId', '請選擇銀行帳戶（如果沒有選項，請先到帳戶頁新增）'); return null; }
+    record.accountId = accountId;
+  }
+  if (paymentMethod === 'creditCard') {
+    const cardId = document.getElementById(idPrefix + 'CardId').value;
+    if (!cardId) { transactionFormError(idPrefix, 'CardId', '請選擇信用卡（如果沒有選項，請先到信用卡頁新增）'); return null; }
+    const card = state.data.creditCards.find(c => c.id === cardId);
+    record.cardId = cardId;
+    const bmEl = document.getElementById(idPrefix + 'BillingMonth');
+    const manualBm = bmEl ? bmEl.value : '';
+    if (manualBm) {
+      if (!isValidYearMonth(manualBm)) { transactionFormError(idPrefix, 'BillingMonth', '帳單月份格式不正確'); return null; }
+      record.billingMonth = manualBm;
+    } else {
+      record.billingMonth = getCardBillingMonth(card, date);
+    }
+    record.cardStatus = document.getElementById(idPrefix + 'CardStatus').value;
+  }
+  return record;
+}
+
+function readTransactionForm(scope) {
+  return readTransactionFields(scope, 'tx');
+}
+
+function quickAddFormBody(scope) {
+  return transactionFieldsHtml(scope, 'qa') +
+    '<button class="btn-primary" onclick="submitQuickAdd(\'' + scope + '\')">儲存</button>';
+}
+
+function openQuickAdd() {
+  openModal('快速記帳',
+    '<label>記到哪裡</label><select id="qaScope" onchange="renderQuickAddForm()">' +
+      '<option value="personal">個人支出</option><option value="family">家庭支出</option></select>' +
+    '<div id="qaFormHost"></div>');
+  renderQuickAddForm();
+}
+
+function renderQuickAddForm() {
+  const scope = document.getElementById('qaScope').value;
+  document.getElementById('qaFormHost').innerHTML = quickAddFormBody(scope);
+  enhanceFormAccessibility(document.getElementById('modal'));
+  handlePaymentMethodChange('qa', scope);
+}
+
+function submitQuickAdd(scope) {
+  const record = readTransactionFields(scope, 'qa');
+  if (!record) return;
+  const saved = addRecord('transactions', record);
+  if (!saved) { showToast('儲存失敗（可能處於鎖定狀態或儲存空間問題），請到備份頁確認'); return; }
+  closeModal();
+  renderKeepScroll();
+  revealRecord(saved.id);
+  showToast('已記錄' + (scope === 'family' ? '家庭' : '個人') + '支出 ' + money(record.amount));
+}
+
+function openEditTransaction(id) {
+  const t = state.data.transactions.find(x => x.id === id);
+  if (!t) { showToast('找不到這筆記錄'); return; }
+  openModal('編輯' + (t.scope === 'family' ? '家庭' : '個人') + '支出',
+    transactionFieldsHtml(t.scope, 'edit', t, true) +
+    '<button class="btn-primary" onclick="submitEditTransaction(\'' + id + '\', \'' + t.scope + '\')">儲存修改</button>' +
+    modalCancelButton());
+  handlePaymentMethodChange('edit', t.scope);
+}
+
+function submitEditTransaction(id, scope) {
+  const original = state.data.transactions.find(x => x.id === id);
+  const oldDate = original ? original.date : null;
+  const record = readTransactionFields(scope, 'edit');
+  if (!record) return;
+  const saved = updateRecord('transactions', id, record);
+  if (!saved) { showToast('儲存失敗（可能處於鎖定狀態或儲存空間問題），請到備份頁確認'); return; }
+  closeModal();
+  renderKeepScroll();
+  revealRecord(id);
+  showToast(editSuccessMessage(scope, oldDate, record.date, '已更新'));
+}
+
+// 記錄清單月份篩選——純畫面狀態，不存進 state/localStorage，預設只看本月，避免清單越滾越長
+let listFilters = {
+  personal: { month: currentYearMonth(), showAll: false },
+  family: { month: currentYearMonth(), showAll: false },
+  accountMovements: { month: currentYearMonth(), showAll: false },
+  creditCardPayments: { month: currentYearMonth(), showAll: false }
+};
+
+function renderListFilterBar(scope) {
+  const f = listFilters[scope];
+  return (
+    '<div class="list-filter">' +
+    '<input type="month" id="listMonth_' + scope + '" value="' + f.month + '" onchange="handleListFilterMonthChange(\'' + scope + '\')"' + (f.showAll ? ' disabled' : '') + '>' +
+    '<label><input type="checkbox" id="listShowAll_' + scope + '"' + (f.showAll ? ' checked' : '') + ' onchange="handleListFilterShowAllChange(\'' + scope + '\')">顯示全部</label>' +
+    '</div>'
+  );
+}
+
+function handleListFilterMonthChange(scope) {
+  listFilters[scope].month = document.getElementById('listMonth_' + scope).value;
+  render();
+}
+
+function handleListFilterShowAllChange(scope) {
+  listFilters[scope].showAll = document.getElementById('listShowAll_' + scope).checked;
+  render();
+}
+
+function filterByListMonth(scope, records) {
+  const f = listFilters[scope];
+  if (f.showAll) return records;
+  return records.filter(r => r.date.slice(0, 7) === f.month);
+}
+
+function emptyListMessage(scope, noun) {
+  const showAll = listFilters[scope] && listFilters[scope].showAll;
+  return showAll ? ('尚無' + noun) : ('這個月還沒有' + noun + '，可在上方新增');
+}
+
+function renderPersonal() {
+  const list = filterByListMonth('personal', state.data.transactions.filter(t => t.scope === 'personal'))
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .map(t => (
+      '<li data-record-id="' + t.id + '"><div class="row"><span>' + escapeHtml(t.note || t.category) + '</span><span>' + money(t.amount) + '</span></div>' +
+      '<div class="muted">' + t.date + ' · ' + escapeHtml(t.category) + ' · ' + paymentMethodLabel(t) + '</div>' +
+      '<div class="action-row"><button class="btn-ghost" onclick="openEditTransaction(\'' + t.id + '\')">編輯</button>' +
+      '<button class="btn-danger" onclick="handleDeleteTransaction(\'' + t.id + '\')">刪除</button></div></li>'
+    )).join('');
+
+  const catTotals = personalCategoryTotals(currentYearMonth());
+  const catRowsHtml = Object.entries(catTotals)
+    .sort((a, b) => b[1] - a[1])
+    .map(([cat, total]) => '<div class="row"><span>' + escapeHtml(cat) + '</span><span>' + money(total) + '</span></div>')
+    .join('');
+
+  return (
+    '<div class="row"><h2>個人記帳</h2><span class="big">本月 ' + money(personalMonthlyTotal(currentYearMonth())) + '</span></div>' +
+    renderTransactionForm('personal', 'handleSaveTransaction') +
+    '<div class="card"><h2>本月類別支出</h2>' + (catRowsHtml || '<div class="muted">這個月還沒有記錄</div>') + '</div>' +
+    '<div class="card"><h2>記錄</h2>' + renderListFilterBar('personal') +
+    '<ul class="list">' + (list || '<li class="muted">' + emptyListMessage('personal', '記錄') + '</li>') + '</ul></div>'
+  );
+}
+
+function paymentMethodLabel(t) {
+  if (t.paymentMethod === 'cash') return '現金';
+  if (t.paymentMethod === 'bankAccount') {
+    const a = state.data.bankAccounts.find(x => x.id === t.accountId);
+    return '銀行帳戶' + (a ? '：' + escapeHtml(a.name) : '');
+  }
+  if (t.paymentMethod === 'creditCard') {
+    const c = state.data.creditCards.find(x => x.id === t.cardId);
+    return '信用卡' + (c ? '：' + escapeHtml(c.name) : '') + '（' + escapeHtml(t.cardStatus) + '）';
+  }
+  return escapeHtml(t.paymentMethod);
+}
+
+function transactionDeleteDetail(t) {
+  if (!t) return '這筆記錄';
+  return t.date + ' ' + (t.scope === 'family' ? '家庭' : '個人') + '支出 ' + money(t.amount) +
+    '（' + (t.note || t.category || '未命名') + '）';
+}
+
+function handleSaveTransaction(scope) {
+  const record = readTransactionForm(scope);
+  if (!record) return;
+  const saved = addRecord('transactions', record);
+  render();
+  revealRecord(saved && saved.id);
+  showToast('已新增' + (scope === 'family' ? '家庭' : '個人') + '支出 ' + money(record.amount));
+}
+
+function handleDeleteTransaction(id) {
+  const t = state.data.transactions.find(x => x.id === id);
+  openConfirmModal('刪除記錄', '確定刪除「' + transactionDeleteDetail(t) + '」？刪除後相關餘額、欠款與提醒會重新計算。', () => {
+    deleteWithFeedback('transactions', id, '已刪除記錄');
+  }, '刪除');
+}
+
+// ===================== 7. UI：家庭基金 =====================
+function categoryOptionsHtml(selected) {
+  return FAMILY_CATEGORIES.map(c => '<option' + optSelected(selected, c) + '>' + c + '</option>').join('');
+}
+
+function familyCategoryRecordId(category) {
+  return 'familyFundCategory-' + FAMILY_CATEGORIES.indexOf(category);
+}
+
+function renderFamilyEnvelopeCards() {
+  return FAMILY_CATEGORIES.map(cat => {
+    const catCash = familyFundCashBalanceByCategory(cat);
+    const catPending = familyFundPendingReimbursementByCategory(cat);
+    const catEstimated = familyFundEstimatedBalanceByCategory(cat);
+    const moreContent =
+      renderLastReconciliation('familyFund', cat) +
+      renderReconciliationHistory('familyFund', cat) +
+      '<div class="action-row"><button class="btn-ghost" onclick="openReconcileFamilyFund(\'' + cat + '\')">對帳</button></div>' +
+      familyFundStatusHtml(catCash, catPending, catEstimated) +
+      familyPendingByCardHtml(cat);
+    return (
+      '<div class="card" data-record-id="' + familyCategoryRecordId(cat) + '">' +
+      '<div class="label">信封</div><h2>' + escapeHtml(cat) + '</h2>' +
+      '<div class="metric-row"><span>預估餘額</span><span class="big metric-value' + (catEstimated < 0 ? ' neg' : '') + '">' + money(catEstimated) + '</span></div>' +
+      '<div class="metric-row"><span>現金餘額</span><span class="metric-value' + (catCash < 0 ? ' neg' : '') + '">' + money(catCash) + '</span></div>' +
+      '<div class="reimb-quick-row"><div class="metric-row"><span>已刷卡待補款</span><span class="metric-value' + (catPending < 0 ? ' neg' : '') + '">' + money(catPending) + (catPending < 0 ? '（已超額補款）' : '') + '</span></div>' +
+      '<button class="btn-ghost" onclick="openQuickReimbursement(\'' + cat + '\',null)">記錄補款</button></div>' +
+      '<details class="tucked"><summary>更多</summary>' + moreContent + '</details>' +
+      '</div>'
+    );
+  }).join('');
+}
+
+function renderFamilyFund() {
+  const accountOptions = state.data.bankAccounts.map(a => '<option value="' + a.id + '">' + escapeHtml(a.name) + '</option>').join('');
+
+  const depositsHtml = [...state.data.familyFundDeposits]
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .map(d => '<li data-record-id="' + d.id + '"><div class="row"><span>' + escapeHtml(d.depositedBy) + ' 存入 ' + escapeHtml(d.category) + '</span><span>' + money(d.amount) + '</span></div><div class="muted">' + d.date + '</div>' +
+      '<div class="action-row"><button class="btn-ghost" onclick="openEditDeposit(\'' + d.id + '\')">編輯</button>' +
+      '<button class="btn-danger" onclick="handleDeleteDeposit(\'' + d.id + '\')">刪除</button></div></li>')
+    .join('');
+
+  const reimbHtml = [...state.data.familyFundReimbursements]
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .map(r => {
+      const acc = state.data.bankAccounts.find(a => a.id === r.toAccountId);
+      const card = state.data.creditCards.find(c => c.id === r.cardId);
+      const noteHtml = r.note ? ' · ' + escapeHtml(r.note) : '';
+      const destination = r.method === 'cash' ? '補款（現金結清）' : '補款到 ' + (acc ? escapeHtml(acc.name) : '?');
+      const cardHtml = r.cardId != null ? ' · ' + (card ? escapeHtml(card.name) : '?') : '';
+      return '<li data-record-id="' + r.id + '"><div class="row"><span>' + escapeHtml(r.category) + ' ' + destination + cardHtml + '</span><span>' + money(r.amount) + '</span></div><div class="muted">' + r.date + noteHtml + '</div>' +
+        '<div class="action-row"><button class="btn-ghost" onclick="openEditReimbursement(\'' + r.id + '\')">編輯</button>' +
+        '<button class="btn-danger" onclick="handleDeleteReimbursement(\'' + r.id + '\')">刪除</button></div></li>';
+    }).join('');
+
+  return (
+    '<h2>家庭基金</h2>' +
+    '<h2 class="section-title">快速記家庭支出</h2>' +
+    renderTransactionForm('family', 'handleSaveTransaction') +
+    '<h2 class="section-title">記錄與分析</h2>' +
+    '<div class="card"><h2>支出記錄</h2>' + renderFamilyExpenseList() + '</div>' +
+
+    '<h2 class="section-title">資金總覽（依信封分類）</h2>' +
+    '<div class="muted" style="margin-bottom:10px">每個信封分開計算；預估餘額＝現金餘額 − 已刷卡待補款。展開「更多」可以看對帳、提醒跟明細。</div>' +
+    renderFamilyEnvelopeCards() +
+
+    '<h2 class="section-title">進階：存入與補款</h2>' +
+    '<details class="tucked"><summary>存入（' + state.data.familyFundDeposits.length + '）</summary>' +
+    '<div class="card">' +
+    '<label>存入人</label><select id="depositBy"><option>宗煜</option><option>太太</option></select>' +
+    '<label>類別（要存進哪個信封）</label><select id="depositCategory">' + categoryOptionsHtml('家用') + '</select>' +
+    '<label>金額</label><input id="depositAmount" type="number" min="1">' +
+    '<label>日期</label><input id="depositDate" type="date" value="' + todayLocalDate() + '">' +
+    '<label>轉出帳戶（選填）</label><select id="depositAccount"><option value="">（現金存入）</option>' + accountOptions + '</select>' +
+    '<button class="btn-primary" onclick="handleAddDeposit()">存入</button>' +
+    '<ul class="list">' + (depositsHtml || '<li class="muted">尚無存入記錄</li>') + '</ul></div></details>' +
+
+    '<details class="tucked"><summary>補款（' + state.data.familyFundReimbursements.length + '）</summary>' +
+    '<div class="card">' +
+    '<label>補哪個信封的刷卡支出</label><select id="reimbCategory">' + categoryOptionsHtml('家用') + '</select>' +
+    '<label>金額</label><input id="reimbAmount" type="number" min="1">' +
+    '<label>日期</label><input id="reimbDate" type="date" value="' + todayLocalDate() + '">' +
+    '<label>補款方式</label><select id="reimbMethod" onchange="handleReimbursementMethodChange(\'reimb\')"><option value="bankAccount">轉入個人帳戶</option><option value="cash">現金結清</option></select>' +
+    '<div id="reimbAccountWrap"><label>撥入帳戶</label><select id="reimbAccount">' + accountOptions + '</select></div>' +
+    '<label>關聯信用卡（選填）</label><select id="reimbCard"><option value="">（未指定）</option>' + state.data.creditCards.map(c => '<option value="' + c.id + '">' + escapeHtml(c.name) + '</option>').join('') + '</select>' +
+    '<label>備注（選填）</label><input id="reimbNote">' +
+    '<div class="muted" style="margin-top:8px">補款是家庭基金結清代墊，不是繳信用卡；實際繳卡請到信用卡頁記還款。</div>' +
+    '<button class="btn-primary" onclick="handleAddReimbursement()">補款</button>' +
+    '<ul class="list">' + (reimbHtml || '<li class="muted">尚無補款記錄</li>') + '</ul></div></details>'
+  );
+}
+
+function renderFamilyExpenseList() {
+  const list = filterByListMonth('family', state.data.transactions.filter(t => t.scope === 'family'))
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .map(t => (
+      '<li data-record-id="' + t.id + '"><div class="row"><span>' + escapeHtml(t.category) + '：' + escapeHtml(t.note) + '</span><span>' + money(t.amount) + '</span></div>' +
+      '<div class="muted">' + t.date + ' · ' + paymentMethodLabel(t) + '</div>' +
+      '<div class="action-row"><button class="btn-ghost" onclick="openEditTransaction(\'' + t.id + '\')">編輯</button>' +
+      '<button class="btn-danger" onclick="handleDeleteTransaction(\'' + t.id + '\')">刪除</button></div></li>'
+    )).join('');
+  return renderListFilterBar('family') + '<ul class="list">' + (list || '<li class="muted">' + emptyListMessage('family', '記錄') + '</li>') + '</ul>';
+}
+
+function handleAddDeposit() {
+  const amount = parsePositiveInt(document.getElementById('depositAmount').value);
+  const date = document.getElementById('depositDate').value;
+  const depositedBy = document.getElementById('depositBy').value;
+  const category = document.getElementById('depositCategory').value;
+  const fromAccountId = document.getElementById('depositAccount').value || null;
+  if (amount === null) { showFieldError('depositAmount', '金額必須是正整數'); return; }
+  if (!date) { showFieldError('depositDate', '請選擇日期'); return; }
+  const saved = addRecord('familyFundDeposits', { date, amount, depositedBy, category, fromAccountId });
+  render();
+  revealRecord(saved && saved.id);
+  showToast('已存入' + category + ' ' + money(amount));
+}
+
+function openEditDeposit(id) {
+  const d = state.data.familyFundDeposits.find(x => x.id === id);
+  if (!d) { showToast('找不到這筆存入'); return; }
+  const accOptions = '<option value="">（現金存入）</option>' +
+    state.data.bankAccounts.map(a => '<option value="' + a.id + '"' + optSelected(d.fromAccountId, a.id) + '>' + escapeHtml(a.name) + '</option>').join('');
+  openModal('編輯存入',
+    '<label>存入人</label><input id="editDepBy" value="' + inputVal(d.depositedBy) + '">' +
+    '<label>類別</label><select id="editDepCategory">' + categoryOptionsHtml(d.category) + '</select>' +
+    '<label>金額</label><input id="editDepAmount" type="number" min="1" value="' + inputVal(d.amount) + '">' +
+    '<label>日期</label><input id="editDepDate" type="date" value="' + d.date + '">' +
+    '<label>轉出帳戶（選填）</label><select id="editDepAccount">' + accOptions + '</select>' +
+    '<div class="muted" style="margin-top:8px">修改金額、類別或帳戶會同步影響對應信封餘額跟個人帳戶餘額。</div>' +
+    '<button class="btn-primary" onclick="submitEditDeposit(\'' + id + '\')">儲存修改</button>' +
+    modalCancelButton());
+}
+
+function submitEditDeposit(id) {
+  const amount = parsePositiveInt(document.getElementById('editDepAmount').value);
+  if (amount === null) { showFieldError('editDepAmount', '金額必須是正整數'); return; }
+  const date = document.getElementById('editDepDate').value;
+  if (!date) { showFieldError('editDepDate', '請選擇日期'); return; }
+  const depositedBy = document.getElementById('editDepBy').value.trim();
+  if (!depositedBy) { showFieldError('editDepBy', '請輸入存入人'); return; }
+  const category = document.getElementById('editDepCategory').value;
+  const patch = { amount, date, depositedBy, category, fromAccountId: document.getElementById('editDepAccount').value || null };
+  const saved = updateRecord('familyFundDeposits', id, patch);
+  if (!saved) { showToast('儲存失敗（可能處於鎖定狀態或儲存空間問題），請到備份頁確認'); return; }
+  closeModal();
+  renderKeepScroll();
+  revealRecord(id);
+  showToast('已更新存入 ' + money(amount));
+}
+
+function handleDeleteDeposit(id) {
+  const d = state.data.familyFundDeposits.find(x => x.id === id);
+  const detail = d ? (d.date + ' ' + d.depositedBy + ' 存入 ' + (d.category || '家用') + ' ' + money(d.amount)) : '這筆存入記錄';
+  openConfirmModal('刪除存入', '確定刪除「' + detail + '」？刪除後家庭基金與轉出帳戶餘額會重新計算。', () => {
+    deleteWithFeedback('familyFundDeposits', id, '已刪除存入');
+  }, '刪除');
+}
+
+let quickReimbCategory = null;
+
+function openQuickReimbursement(category, cardId) {
+  if (FAMILY_CATEGORIES.indexOf(category) === -1) { showToast('找不到這個家庭基金分類'); return; }
+  quickReimbCategory = category;
+  const defaultMethod = state.data.bankAccounts.length > 0 ? 'bankAccount' : 'cash';
+  const cardOptions = '<option value="">（未指定）</option>' + state.data.creditCards.map(c =>
+    '<option value="' + c.id + '"' + optSelected(cardId, c.id) + '>' + escapeHtml(c.name) + '</option>'
+  ).join('');
+  const accountOptions = state.data.bankAccounts.map(a => '<option value="' + a.id + '">' + escapeHtml(a.name) + '</option>').join('');
+  const remaining = quickReimbRemaining(category, cardId);
+  openModal('記錄補款',
+    '<div class="label">補款信封</div><h2>' + escapeHtml(category) + '</h2>' +
+    '<label>關聯信用卡（選填）</label><select id="qrCard" onchange="updateQuickReimbursementPreview()">' + cardOptions + '</select>' +
+    '<label>補款方式</label><select id="qrMethod" onchange="handleReimbursementMethodChange(\'qr\')"><option value="bankAccount"' + optSelected(defaultMethod, 'bankAccount') + '>轉入個人帳戶</option><option value="cash"' + optSelected(defaultMethod, 'cash') + '>現金結清</option></select>' +
+    '<div id="qrAccountWrap"' + (defaultMethod === 'cash' ? ' style="display:none"' : '') + '><label>撥入帳戶</label><select id="qrAccount" onchange="updateQuickReimbursementPreview()">' + accountOptions + '</select></div>' +
+    '<label>金額</label><input id="qrAmount" type="number" min="1" inputmode="numeric" oninput="updateQuickReimbursementPreview()">' +
+    '<div class="action-row"><button id="qrFull" class="btn-secondary" onclick="fillQuickReimbursementFull()"' + (remaining <= 0 ? ' disabled' : '') + '>全部補清</button><span id="qrFullHint" class="muted">' + (remaining <= 0 ? '目前沒有待補金額' : '可補 ' + money(remaining)) + '</span></div>' +
+    '<label>日期</label><input id="qrDate" type="date" value="' + todayLocalDate() + '">' +
+    '<label>備注（選填）</label><input id="qrNote">' +
+    '<div id="qrPreview" aria-live="polite"></div>' +
+    '<div class="muted" style="margin-top:8px">補款是家庭基金結清代墊，不是繳信用卡；實際繳卡請到信用卡頁記還款。</div>' +
+    '<button class="btn-primary" onclick="submitQuickReimbursement()">儲存補款</button>' + modalCancelButton()
+  );
+}
+
+function selectedQuickReimbursementCardId() {
+  const card = document.getElementById('qrCard');
+  return card && card.value ? card.value : null;
+}
+
+function fillQuickReimbursementFull() {
+  const amount = quickReimbRemaining(quickReimbCategory, selectedQuickReimbursementCardId());
+  if (amount <= 0) return;
+  document.getElementById('qrAmount').value = amount;
+  updateQuickReimbursementPreview();
+}
+
+function updateQuickReimbursementPreview() {
+  const preview = document.getElementById('qrPreview');
+  if (!preview || quickReimbCategory == null) return;
+  const cardId = selectedQuickReimbursementCardId();
+  const remaining = quickReimbRemaining(quickReimbCategory, cardId);
+  const fullButton = document.getElementById('qrFull');
+  const fullHint = document.getElementById('qrFullHint');
+  if (fullButton) fullButton.disabled = remaining <= 0;
+  if (fullHint) fullHint.textContent = remaining <= 0 ? '目前沒有待補金額' : '可補 ' + money(remaining);
+  const amount = parsePositiveInt(document.getElementById('qrAmount').value);
+  if (amount === null) { preview.innerHTML = ''; return; }
+  const method = document.getElementById('qrMethod').value === 'cash' ? 'cash' : 'bankAccount';
+  const accountId = document.getElementById('qrAccount').value;
+  const account = state.data.bankAccounts.find(a => a.id === accountId);
+  const card = state.data.creditCards.find(c => c.id === cardId);
+  const cashBefore = familyFundCashBalanceByCategory(quickReimbCategory);
+  const bankLine = method === 'cash'
+    ? '銀行帳戶：不影響任何銀行帳戶'
+    : '銀行帳戶：' + (account ? escapeHtml(account.name) + '：' + money(bankAccountBalance(account.id)) + ' → ' + money(bankAccountBalance(account.id) + amount) : '請選擇撥入帳戶');
+  const pendingLabel = card ? escapeHtml(card.name) + ' 待補' : escapeHtml(quickReimbCategory) + ' 待補';
+  const overHtml = amount > remaining
+    ? '<div class="alert-due" style="margin-top:10px">這筆補款超過目前待補金額，會變成超額補款<label><input id="qrOverConfirm" type="checkbox">我確認要超額補款</label></div>'
+    : '';
+  preview.innerHTML = '<div class="reimb-impact"><div class="label">儲存後的帳務影響</div>' +
+    '<div class="row"><span>家庭基金「' + escapeHtml(quickReimbCategory) + '」現金</span><span>' + money(cashBefore) + ' → ' + money(cashBefore - amount) + '</span></div>' +
+    '<div class="row"><span>' + bankLine + '</span></div>' +
+    '<div class="row"><span>' + pendingLabel + '</span><span>' + money(remaining) + ' → ' + money(remaining - amount) + '</span></div>' +
+    '<div class="row"><span>信用卡欠款</span><b>不變（補款不是繳卡）</b></div></div>' + overHtml;
+}
+
+function submitQuickReimbursement() {
+  const amount = parsePositiveInt(document.getElementById('qrAmount').value);
+  const date = document.getElementById('qrDate').value;
+  const method = document.getElementById('qrMethod').value === 'cash' ? 'cash' : 'bankAccount';
+  const toAccountId = method === 'cash' ? null : document.getElementById('qrAccount').value;
+  const cardId = selectedQuickReimbursementCardId();
+  if (amount === null) { showFieldError('qrAmount', '金額必須是正整數'); return; }
+  if (!date) { showFieldError('qrDate', '請選擇日期'); return; }
+  if (method === 'bankAccount' && !toAccountId) { showFieldError('qrAccount', '請選擇撥入帳戶'); return; }
+  if (amount > quickReimbRemaining(quickReimbCategory, cardId)) {
+    const confirmBox = document.getElementById('qrOverConfirm');
+    if (!confirmBox || !confirmBox.checked) { showFieldError('qrAmount', '請先勾選確認超額補款'); return; }
+  }
+  const note = document.getElementById('qrNote').value.trim();
+  const saved = addRecord('familyFundReimbursements', { date, amount, category: quickReimbCategory, method, toAccountId, cardId, note });
+  if (!saved) { showToast('儲存失敗（可能處於鎖定狀態或儲存空間問題），請到備份頁確認'); return; }
+  const category = quickReimbCategory;
+  const card = state.data.creditCards.find(c => c.id === cardId);
+  const cardRemaining = cardId == null ? null : quickReimbRemaining(category, cardId);
+  const aggregateRemaining = familyFundPendingReimbursementByCategory(category);
+  closeModal();
+  renderKeepScroll();
+  revealRecord(saved.id);
+  showToast('已補款 ' + money(amount) + '（' + category + '／' + (card ? card.name : (method === 'cash' ? '現金結清' : '未指定信用卡')) + '）；此分類剩餘待補 ' + money(aggregateRemaining) + (card ? '，該卡剩餘 ' + money(cardRemaining) : ''));
+}
+
+function handleAddReimbursement() {
+  const amount = parsePositiveInt(document.getElementById('reimbAmount').value);
+  const date = document.getElementById('reimbDate').value;
+  const category = document.getElementById('reimbCategory').value;
+  const rawMethod = document.getElementById('reimbMethod').value;
+  const method = rawMethod === 'cash' ? 'cash' : 'bankAccount';
+  const toAccountId = method === 'cash' ? null : document.getElementById('reimbAccount').value;
+  const cardId = document.getElementById('reimbCard').value || null;
+  const note = document.getElementById('reimbNote').value.trim();
+  if (amount === null) { showFieldError('reimbAmount', '金額必須是正整數'); return; }
+  if (!date) { showFieldError('reimbDate', '請選擇日期'); return; }
+  if (method === 'bankAccount' && !toAccountId) { showFieldError('reimbAccount', '請選擇撥入帳戶'); return; }
+  const saved = addRecord('familyFundReimbursements', { date, amount, category, method, toAccountId, cardId, note });
+  render();
+  revealRecord(saved && saved.id);
+  showToast(method === 'cash'
+    ? '已補款 ' + money(amount) + '（現金結清）；不影響任何銀行帳戶，也不是信用卡還款'
+    : '已補款 ' + money(amount) + '（' + category + '）到個人帳戶；這不是支出，是家庭基金撥回');
+}
+
+function handleReimbursementMethodChange(prefix) {
+  const methodEl = document.getElementById(prefix + 'Method');
+  const wrap = document.getElementById(prefix + 'AccountWrap');
+  if (wrap) wrap.style.display = methodEl && methodEl.value === 'cash' ? 'none' : '';
+  if (prefix === 'qr') updateQuickReimbursementPreview();
+}
+
+function openEditReimbursement(id) {
+  const r = state.data.familyFundReimbursements.find(x => x.id === id);
+  if (!r) { showToast('找不到這筆補款'); return; }
+  const accOptions = state.data.bankAccounts.map(a => '<option value="' + a.id + '"' + optSelected(r.toAccountId, a.id) + '>' + escapeHtml(a.name) + '</option>').join('');
+  const cardOptions = '<option value="">（未指定）</option>' + state.data.creditCards.map(c => '<option value="' + c.id + '"' + optSelected(r.cardId, c.id) + '>' + escapeHtml(c.name) + '</option>').join('');
+  const method = r.method === 'cash' ? 'cash' : 'bankAccount';
+  openModal('編輯補款',
+    '<label>補哪個信封的刷卡支出</label><select id="editReimbCategory">' + categoryOptionsHtml(r.category) + '</select>' +
+    '<label>金額</label><input id="editReimbAmount" type="number" min="1" value="' + inputVal(r.amount) + '">' +
+    '<label>日期</label><input id="editReimbDate" type="date" value="' + r.date + '">' +
+    '<label>補款方式</label><select id="editReimbMethod" onchange="handleReimbursementMethodChange(\'editReimb\')"><option value="bankAccount"' + optSelected(method, 'bankAccount') + '>轉入個人帳戶</option><option value="cash"' + optSelected(method, 'cash') + '>現金結清</option></select>' +
+    '<div id="editReimbAccountWrap"' + (method === 'cash' ? ' style="display:none"' : '') + '><label>撥入帳戶</label><select id="editReimbAccount">' + accOptions + '</select></div>' +
+    '<label>關聯信用卡（選填）</label><select id="editReimbCard">' + cardOptions + '</select>' +
+    '<label>備注（選填）</label><input id="editReimbNote" value="' + inputVal(r.note) + '">' +
+    '<div class="muted" style="margin-top:8px">修改金額、類別或帳戶會同步影響對應信封餘額跟個人帳戶餘額。</div>' +
+    '<button class="btn-primary" onclick="submitEditReimbursement(\'' + id + '\')">儲存修改</button>' +
+    modalCancelButton());
+}
+
+function submitEditReimbursement(id) {
+  const amount = parsePositiveInt(document.getElementById('editReimbAmount').value);
+  if (amount === null) { showFieldError('editReimbAmount', '金額必須是正整數'); return; }
+  const date = document.getElementById('editReimbDate').value;
+  if (!date) { showFieldError('editReimbDate', '請選擇日期'); return; }
+  const category = document.getElementById('editReimbCategory').value;
+  const method = document.getElementById('editReimbMethod').value === 'cash' ? 'cash' : 'bankAccount';
+  const toAccountId = method === 'cash' ? null : document.getElementById('editReimbAccount').value;
+  const cardId = document.getElementById('editReimbCard').value || null;
+  if (method === 'bankAccount' && !toAccountId) { showFieldError('editReimbAccount', '請選擇撥入帳戶'); return; }
+  const patch = { amount, date, category, method, toAccountId, cardId, note: document.getElementById('editReimbNote').value.trim() };
+  const saved = updateRecord('familyFundReimbursements', id, patch);
+  if (!saved) { showToast('儲存失敗（可能處於鎖定狀態或儲存空間問題），請到備份頁確認'); return; }
+  closeModal();
+  renderKeepScroll();
+  revealRecord(id);
+  showToast('已更新補款 ' + money(amount));
+}
+
+function handleDeleteReimbursement(id) {
+  const r = state.data.familyFundReimbursements.find(x => x.id === id);
+  const acc = r ? state.data.bankAccounts.find(a => a.id === r.toAccountId) : null;
+  const detail = r ? (r.date + ' ' + (r.category || '家用') + ' 補款 ' + money(r.amount) + (r.method === 'cash' ? '（現金結清）' : (acc ? ' 到 ' + acc.name : ''))) : '這筆補款記錄';
+  openConfirmModal('刪除補款', '確定刪除「' + detail + '」？刪除後家庭基金與撥入帳戶餘額會重新計算。', () => {
+    deleteWithFeedback('familyFundReimbursements', id, '已刪除補款');
+  }, '刪除');
+}
+
+// ===================== 8. UI：總覽 =====================
+function handleGoToView(key) {
+  routeToView(key);
+  render();
+}
+
+function renderOverview() {
+  const ym = currentYearMonth();
+  const accountsHtml = state.data.bankAccounts.map(a =>
+    '<div class="metric-row"><span>' + escapeHtml(a.name) + '</span><span class="metric-value">' + money(bankAccountBalance(a.id)) + '</span></div>'
+  ).join('') || '<div class="muted">尚無帳戶，先新增第一個</div>';
+
+  const totalCardOwed = state.data.creditCards.reduce((total, c) => total + creditCardTotalOwed(c.id), 0);
+  const cardReminders = state.data.creditCards
+    .map(c => ({ card: c, reminder: cardPaymentReminder(c) }))
+    .filter(item => item.reminder.level !== 'none');
+  const cardsHtml = state.data.creditCards.length === 0
+    ? '<div class="muted">尚無信用卡，先新增第一張</div>'
+    : '<div class="metric-row"><span>總欠款</span><span class="big metric-value">' + money(totalCardOwed) + '</span></div>' +
+      (cardReminders.length
+        ? cardReminders.map(item =>
+            '<div class="' + (item.reminder.level === 'overdue' ? 'alert-overdue' : 'alert-due') + '">' +
+            escapeHtml(item.card.name) + '：' +
+            (item.reminder.level === 'overdue' ? '已逾期' : '即將到期') + '，' +
+            formatDateShort(item.reminder.dueDate) + ' 前要處理，截至本期尚未還款 ' + money(item.reminder.amount) +
+            '</div>'
+          ).join('')
+        : '<div class="muted">無待繳提醒</div>');
+
+  const familyRows = FAMILY_CATEGORIES.map(cat => {
+    const est = familyFundEstimatedBalanceByCategory(cat);
+    return '<div class="metric-row"><span>' + escapeHtml(cat) + '</span><span class="metric-value' + (est < 0 ? ' neg' : '') + '">' + money(est) + '</span></div>';
+  }).join('');
+
+  return (
+    '<section class="overview-hero" aria-labelledby="overviewHeroTitle">' +
+      '<p class="hero-kicker">本月家庭資金狀態</p>' +
+      '<h1 class="hero-title" id="overviewHeroTitle">沿著路線，看懂家的每一筆錢。</h1>' +
+      '<div class="hero-summary"><div><div class="label" style="color:#d6e0e2">銀行總資產</div><div class="big hero-amount">' + money(bankAccountsTotalAssets()) + '</div></div>' +
+      '<div class="hero-secondary">本月個人支出<strong>' + money(personalMonthlyTotal(ym)) + '</strong></div></div>' +
+      '<button class="btn-primary quick-add" onclick="openQuickAdd()">' + iconHtml('quickAdd') + '<span>快速記帳</span></button>' +
+    '</section>' + backupReminderBannerHtml() +
+    '<section class="money-map" aria-labelledby="moneyMapTitle">' +
+      '<div class="money-map-title"><h2 id="moneyMapTitle">家庭資金路線</h2><span class="muted">沿著站點查看與處理</span></div>' +
+      '<div class="route-rails" aria-hidden="true"></div>' +
+      '<div class="card tab-personal metro-station station-personal"><div class="station-head"><div class="station-heading">' + iconHtml('personal') + '<div><div class="label">個人站</div><h2>本月個人支出</h2></div></div><button class="btn-ghost station-link" onclick="handleGoToView(\'personal\')">查看明細 ›</button></div><div class="big">' + money(personalMonthlyTotal(ym)) + '</div></div>' +
+      '<div class="card tab-account metro-station station-account"><div class="station-head"><div class="station-heading">' + iconHtml('bankAccounts') + '<div><div class="label">銀行站</div><h2>個人銀行帳戶</h2></div></div><button class="btn-ghost station-link" onclick="handleGoToView(\'bankAccounts\')">查看明細 ›</button></div>' + accountsHtml +
+        '<div class="metric-row"><b>總資產</b><b class="metric-value">' + money(bankAccountsTotalAssets()) + '</b></div></div>' +
+      '<div class="card tab-family metro-station station-family"><div class="station-head"><div class="station-heading">' + iconHtml('family') + '<div><div class="label">家庭站</div><h2>家庭基金（各信封預估餘額）</h2></div></div><button class="btn-ghost station-link" onclick="handleGoToView(\'family\')">查看明細 ›</button></div>' + familyRows + '</div>' +
+      '<div class="card tab-credit metro-station station-credit"><div class="station-head"><div class="station-heading">' + iconHtml('creditCards') + '<div><div class="label">信用卡站</div><h2>待繳與到期狀態</h2></div></div><button class="btn-ghost station-link" onclick="handleGoToView(\'creditCards\')">查看明細 ›</button></div>' + cardsHtml + '</div>' +
+    '</section>'
+  );
+}
+
+// ===================== 9. UI：備份還原 =====================
+function renderBackup() {
+  if (stateBlocked) {
+    return (
+      '<div class="card"><h2>備份還原</h2>' +
+      '<p class="neg"><b>目前處於鎖定狀態</b>：偵測到本機資料版本不相容或已損毀，畫面上顯示的是空白資料，不是你真正的資料，一般匯出功能已停用（避免匯出空檔案讓你誤以為備份成功）。</p>' +
+      '<p class="muted">請按「救援匯出」，會把手機裡原始存的內容原封不動下載下來（不經過畫面解析），可以拿去找人協助排查，或確認格式後手動修正再匯入。</p>' +
+      '<button class="btn-danger" onclick="handleRescueExport()">救援匯出（原始資料）</button>' +
+      '<label style="margin-top:14px">匯入正確版本的備份檔</label>' +
+      '<input type="file" id="importFile" accept="application/json" onchange="handleImport(event)">' +
+      '</div>'
+    );
+  }
+  const last = state.lastBackupAt ? new Date(state.lastBackupAt).toLocaleString('zh-TW') : '從未備份';
+  return (
+    '<div class="card"><h2>備份還原</h2>' +
+    '<div class="muted">上次備份：' + last + (storageAvailable ? '' : '　<span class="neg">（本機儲存目前無法使用，請盡快匯出）</span>') + '</div>' +
+    '<button class="btn-primary" onclick="handleExport()">匯出備份（JSON）</button>' +
+    '<label style="margin-top:14px">匯入備份檔</label>' +
+    '<input type="file" id="importFile" accept="application/json" onchange="handleImport(event)">' +
+    '</div>'
+  );
+}
+
+function downloadJsonText(text, filename) {
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function handleExport() {
+  if (isInTestMode()) {
+    if (!confirm('目前是測試資料模式，匯出的會是假資料，不是你的真實備份。確定要繼續匯出嗎？')) return;
+  } else {
+    state.lastBackupAt = nowIso();
+    state.backupReminderSnoozedUntil = null;
+    saveState();
+  }
+  downloadJsonText(JSON.stringify(state, null, 2), 'family-budget-backup-' + todayLocalDate() + '.json');
+  render();
+}
+
+function handleRescueExport() {
+  let raw = null;
+  try {
+    raw = localStorage.getItem(STORAGE_KEY);
+  } catch (e) {
+    alert('連讀取原始資料都失敗了，可能是瀏覽器完全封鎖了本機儲存功能。');
+    return;
+  }
+  if (!raw) {
+    alert('本機沒有找到任何原始資料可以救援。');
+    return;
+  }
+  downloadJsonText(raw, 'family-budget-RESCUE-' + todayLocalDate() + '.json');
+}
+
+function backupSummaryText(importState) {
+  const data = importState.data || {};
+  return '備份摘要：更新時間 ' + (importState.updatedAt ? new Date(importState.updatedAt).toLocaleString('zh-TW') : '未知') +
+    '；交易 ' + (data.transactions || []).length +
+    ' 筆、帳戶 ' + (data.bankAccounts || []).length +
+    ' 個、信用卡 ' + (data.creditCards || []).length +
+    ' 張、家庭基金存入 ' + (data.familyFundDeposits || []).length +
+    ' 筆、補款 ' + (data.familyFundReimbursements || []).length +
+    ' 筆、對帳 ' + (data.monthlyReconciliation || []).length + ' 筆。';
+}
+
+// id 必須符合 genId() 產生的安全字元集（英數字），避免匯入的資料帶有引號等字元
+// 破壞畫面上用字串拼接組出來的 inline onclick
+function isValidId(id) {
+  return typeof id === 'string' && id.length > 0 && id.length < 64 && /^[a-z0-9]+$/i.test(id);
+}
+
+function handleImport(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function () {
+    let parsed;
+    try {
+      parsed = JSON.parse(reader.result);
+    } catch (e) {
+      alert('這個檔案不是有效的 JSON 備份檔。');
+      return;
+    }
+    const result = deepValidateAndMigrate(parsed);
+    if (result.error) {
+      alert('這份備份檔無法匯入（' + result.error + '）。為避免匯入後畫面出錯或帳務算錯，已阻擋。');
+      return;
+    }
+    openConfirmModal('匯入備份', backupSummaryText(result.state) + ' 匯入會覆蓋目前所有資料，確定要繼續嗎？', () => {
+      restoreState(result.state); // 用 restoreState 而不是直接改 state，才會正確解除任務 1 的鎖定狀態
+      showToast('匯入成功');
+      render();
+    }, '匯入');
+  };
+  reader.readAsText(file);
+}
+
+function handleJumpToProblem(jump, id) {
+  closeModal();
+  routeToView(jump);
+  render();
+  if (id) revealRecord(id);
+}
+
+function renderWrappedText(text, size) {
+  const chars = Array.from(String(text || ''));
+  const chunks = [];
+  for (let i = 0; i < chars.length; i += size) {
+    chunks.push(chars.slice(i, i + size).join(''));
+  }
+  return chunks.map(escapeHtml).join('<br>');
+}
+
+function renderProblemItem(p) {
+  const idArg = p.id ? ', \'' + p.id + '\'' : '';
+  return (
+    '<li class="problem-item"><div class="problem-type">' + escapeHtml(p.type) + '</div><div class="problem-desc">' + renderWrappedText(p.desc, 22) + '</div>' +
+    '<button class="btn-ghost problem-action" onclick="handleJumpToProblem(\'' + p.jump + '\'' + idArg + ')">前往</button></li>'
+  );
+}
+
+function renderDataCheck() {
+  const orphanProblems = checkOrphanAndAmounts();
+  const healthProblems = checkHealthAnomalies();
+  const allProblems = orphanProblems.concat(healthProblems);
+  const problemsHtml = allProblems.length
+    ? '<ul class="list">' + allProblems.map(renderProblemItem).join('') + '</ul>'
+    : '<div class="muted">檢查完成，沒有發現異常。</div>';
+  const testModeBlock = stateBlocked
+    ? '<div class="muted">目前處於鎖定狀態，無法使用測試資料模式。</div>'
+    : (isInTestMode()
+      ? '<button class="btn-danger" onclick="handleExitTestMode()">退出測試模式</button>'
+      : '<button class="btn-secondary" onclick="handleEnterTestMode()">進入測試模式</button>');
+
+  return (
+    '<div class="card"><h2>資料健康度檢查</h2>' +
+    problemsHtml +
+    '</div>' +
+    '<div class="card"><h2>測試資料模式</h2>' +
+    '<div class="muted">載入一批假資料熟悉功能，不影響真實資料，<br>隨時可退出還原。</div>' +
+    testModeBlock +
+    '</div>'
+  );
+}
+
+let reportsViewMonth = null;
+
+function handleReportsMonthChange() {
+  const value = document.getElementById('reportsViewMonth').value;
+  reportsViewMonth = isValidYearMonth(value) ? value : null;
+  render();
+}
+
+function reportBarPercent(amount, maximum) {
+  if (maximum <= 0) return 0;
+  return Math.max(0, Math.min(100, amount / maximum * 100));
+}
+
+function renderReportRankingList(items, kind, emptyText) {
+  if (items.length === 0) return '<div class="muted">' + emptyText + '</div>';
+  const maximum = items[0].amount;
+  return '<div class="report-list">' + items.map(item => (
+    '<div class="report-item">' +
+      '<div class="report-item-head"><span>' + escapeHtml(item.category) + '</span><span>' + money(item.amount) + '</span></div>' +
+      '<div class="report-bar-track" aria-hidden="true"><div class="report-bar report-bar-' + kind + '" style="width:' + reportBarPercent(item.amount, maximum) + '%"></div></div>' +
+    '</div>'
+  )).join('') + '</div>';
+}
+
+function renderReportTrend(trend, endYearMonth) {
+  const maximum = trend.reduce((max, item) => Math.max(max, item.total), 0);
+  const endYear = endYearMonth.slice(0, 4);
+  const rows = trend.map(item => {
+    const label = item.ym.slice(0, 4) === endYear ? Number(item.ym.slice(5, 7)) + '月' : item.ym;
+    const bars = maximum > 0
+      ? '<div class="report-bar report-bar-personal" style="width:' + reportBarPercent(item.personal, maximum) + '%"></div>' +
+        '<div class="report-bar report-bar-family" style="width:' + reportBarPercent(item.family, maximum) + '%"></div>'
+      : '';
+    return '<div class="report-trend-row">' +
+      '<span class="report-trend-label">' + label + '</span>' +
+      '<div class="report-bar-track" aria-hidden="true">' + bars + '</div>' +
+      '<span class="report-trend-value">' + money(item.total) + '</span>' +
+    '</div>';
+  }).join('');
+  return (maximum > 0 ? '' : '<div class="muted" style="margin-bottom:10px">最近六個月沒有交易。</div>') +
+    '<div class="report-trend-list">' + rows + '</div>';
+}
+
+function renderReports() {
+  const ym = reportsViewMonth || currentYearMonth();
+  const summary = reportSummary(ym);
+  const rankings = reportCategoryRanking(ym);
+  const trend = reportSixMonthTrend(ym);
+  return (
+    '<h2>報表</h2>' +
+    '<div class="card"><div class="report-filter">' +
+      '<div><label for="reportsViewMonth">查看月份</label><input id="reportsViewMonth" type="month" value="' + ym + '" onchange="handleReportsMonthChange()"></div>' +
+      '<button class="btn-ghost" onclick="reportsViewMonth=null;render()">回到本月</button>' +
+    '</div><div class="muted" style="margin-top:8px">正在查看 ' + ym + '</div></div>' +
+    '<div class="card"><h2>月支出摘要</h2>' +
+      '<div class="metric-row"><span>個人</span><span class="metric-value">' + money(summary.personal) + '</span></div>' +
+      '<div class="metric-row"><span>家庭</span><span class="metric-value">' + money(summary.family) + '</span></div>' +
+      '<div class="metric-row"><b>合計</b><span class="big metric-value">' + money(summary.total) + '</span></div>' +
+    '</div>' +
+    '<div class="card"><h2>分類排行</h2>' +
+      '<div class="report-section"><h3 class="report-section-title">個人分類</h3>' + renderReportRankingList(rankings.personal, 'personal', '這個月沒有個人交易。') + '</div>' +
+      '<div class="report-section"><h3 class="report-section-title">家庭分類</h3>' + renderReportRankingList(rankings.family, 'family', '這個月沒有家庭交易。') + '</div>' +
+    '</div>' +
+    '<div class="card"><h2>最近六個月趨勢</h2>' +
+      '<div class="report-legend"><span class="report-legend-item"><span class="report-legend-swatch report-bar-personal"></span>個人</span>' +
+      '<span class="report-legend-item"><span class="report-legend-swatch report-bar-family"></span>家庭</span></div>' +
+      renderReportTrend(trend, ym) +
+    '</div>'
+  );
+}
+
+const MORE_MENU_ITEMS = [
+  { key: 'creditCards', label: '信用卡', desc: '卡片、還款、分期、對帳', render: renderCreditCards, accent: 'credit', icon: 'creditCards' },
+  { key: 'bankAccounts', label: '銀行帳戶', desc: '餘額、異動、帳戶對帳', render: renderBankAccounts, accent: 'account', icon: 'bankAccounts' },
+  { key: 'reports', label: '報表', desc: '月支出摘要、分類排行、六個月趨勢', render: renderReports, accent: 'neutral', icon: 'reports' },
+  { key: 'dataCheck', label: '資料自查', desc: '檢查孤兒資料、異常金額、測試資料', render: renderDataCheck, accent: 'neutral', icon: 'dataCheck' },
+  { key: 'backup', label: '備份與還原', desc: '匯出、匯入、救援備份', render: renderBackup, accent: 'neutral', icon: 'backup' },
+  { key: 'settings', label: '設定', desc: '銀行清單與分類關鍵字', render: renderSettings, accent: 'neutral', icon: 'settings' }
+];
+
+let moreView = null;
+
+function moreMenuItem(key) {
+  return MORE_MENU_ITEMS.find(item => item.key === key) || null;
+}
+
+function renderMoreMenu() {
+  return (
+    '<h2>更多</h2>' +
+    '<div class="card more-menu">' +
+    MORE_MENU_ITEMS.map(item =>
+      '<button class="more-menu-item tab-' + item.accent + '" onclick="setMoreView(\'' + item.key + '\')">' +
+      '<span class="more-menu-icon">' + iconHtml(item.icon) + '</span>' +
+      '<span><span class="more-menu-title">' + escapeHtml(item.label) + '</span>' +
+      '<span class="more-menu-desc">' + escapeHtml(item.desc) + '</span></span>' +
+      '<span class="more-menu-arrow">›</span>' +
+      '</button>'
+    ).join('') +
+    '</div>'
+  );
+}
+
+function renderMore() {
+  if (!moreView) return renderMoreMenu();
+  const item = moreMenuItem(moreView);
+  if (!item) return renderMoreMenu();
+  return '<button class="btn-ghost more-back" onclick="setMoreView(null)">‹ 更多</button>' + item.render();
+}
+
+function setMoreView(view) {
+  moreView = view;
+  render();
+}
+
+// ===================== 10. 導覽與初始化 =====================
+const TABS = [
+  { key: 'overview', label: '總覽', render: renderOverview, accent: 'neutral', icon: 'overview' },
+  { key: 'personal', label: '個人', render: renderPersonal, accent: 'personal', icon: 'personal' },
+  { key: 'family', label: '家庭', render: renderFamilyFund, accent: 'family', icon: 'family' },
+  { key: 'more', label: '更多', render: renderMore, accent: 'neutral', icon: 'more' }
+];
+
+let currentView = 'overview';
+
+function renderTabbar(tab) {
+  document.getElementById('tabbar').innerHTML = TABS.map(t =>
+    '<button class="tab-' + t.accent + (t.key === currentView ? ' active' : '') + '"' + (t.key === currentView ? ' aria-current="page"' : '') + ' onclick="switchView(\'' + t.key + '\')">' + iconHtml(t.icon) + '<span>' + t.label + '</span></button>'
+  ).join('');
+}
+
+function activeTab() {
+  return TABS.find(t => t.key === currentView) || TABS[0];
+}
+
+function activeAccent(tab) {
+  const item = currentView === 'more' && moreView ? moreMenuItem(moreView) : null;
+  return item ? item.accent : tab.accent;
+}
+
+function routeToView(key) {
+  if (key === 'creditCards' || key === 'bankAccounts' || key === 'dataCheck' || key === 'backup' || key === 'settings') {
+    currentView = 'more';
+    moreView = key;
+    return;
+  }
+  currentView = TABS.some(t => t.key === key) ? key : 'overview';
+  if (currentView !== 'more') moreView = null;
+}
+
+function render() {
+  let tab = activeTab();
+  if (tab.key !== currentView) {
+    currentView = tab.key;
+    if (currentView !== 'more') moreView = null;
+  }
+  try {
+    const reminderHtml = currentView === 'overview' ? '' : backupReminderBannerHtml();
+    document.getElementById('app').className = 'ctx-' + activeAccent(tab);
+    document.getElementById('app').innerHTML = privacyToggleHtml() + testModeBannerHtml() + reminderHtml + tab.render();
+    renderTabbar(tab);
+    enhanceFormAccessibility(document);
+  } catch (e) {
+    // 任何一頁畫面渲染失敗都不該讓整頁變空白，至少要留一個看得懂的訊息
+    document.getElementById('app').innerHTML =
+      privacyToggleHtml() +
+      testModeBannerHtml() +
+      backupReminderBannerHtml() +
+      '<div class="card"><h2>畫面發生錯誤</h2>' +
+      '<p>' + escapeHtml(e.message) + '</p>' +
+      '<p class="muted">可能是資料格式有問題。請到「備份」頁嘗試匯入一份正確的備份檔，或聯絡開發者協助排查。</p></div>';
+    renderTabbar(tab);
+    enhanceFormAccessibility(document);
+  }
+}
+
+function switchView(key) {
+  currentView = TABS.some(t => t.key === key) ? key : 'overview';
+  if (currentView === 'more') {
+    moreView = stateBlocked ? 'backup' : null;
+  } else {
+    moreView = null;
+  }
+  render();
+}
+
+render();
+</script>
+</body>
+</html>
