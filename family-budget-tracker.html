@@ -183,6 +183,23 @@
   ul.list { list-style: none; margin: 0; padding: 0; }
   ul.list li { border-bottom: 1px solid var(--border); padding: 9px 0; }
   ul.list li:last-child { border-bottom: none; }
+  .ledger-list { display: grid; gap: 8px; margin-top: 8px; }
+  .ledger-item { border: 1px solid var(--border); border-radius: 12px; padding: 10px; background: var(--field); min-width: 0; }
+  .ledger-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: start; }
+  .ledger-title { font-weight: 700; overflow-wrap: anywhere; }
+  .ledger-badge { display: inline-block; padding: 2px 7px; border: 1px solid var(--border); border-radius: 999px; font-size: 11px; color: var(--ink-muted); margin-bottom: 4px; }
+  .ledger-delta { font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ledger-delta.income { color: var(--personal); }
+  .ledger-delta.expense { color: var(--danger); }
+  .ledger-after { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 7px; color: var(--ink-muted); font-size: 12px; }
+  .ledger-after b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .ledger-filter { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 8px 0 12px; }
+  .ledger-filter label { margin-top: 0; }
+  .deposit-impact { margin-top: 10px; padding: 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--field); }
+  .reconcile-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
+  .reconcile-metric { border: 1px solid var(--border); border-radius: 10px; padding: 8px; min-width: 0; }
+  .reconcile-metric b { display: block; margin-top: 3px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+  @media (max-width: 390px) { .reconcile-summary { grid-template-columns: minmax(0, 1fr); } }
   details.tucked { margin-top: 4px; }
   details.tucked summary {
     cursor: pointer; font-size: 14px; font-weight: 700; color: var(--ink-muted);
@@ -929,13 +946,7 @@ function familyFundCashBalance() {
 }
 
 function familyFundCashBalanceByCategory(category) {
-  const deposits = sum(state.data.familyFundDeposits.filter(d => d.category === category), 'amount');
-  const cashExpenses = sum(
-    state.data.transactions.filter(t => t.scope === 'family' && t.category === category && (t.paymentMethod === 'cash' || t.paymentMethod === 'bankAccount')),
-    'amount'
-  );
-  const reimbursements = sum(state.data.familyFundReimbursements.filter(r => r.category === category), 'amount');
-  return deposits - cashExpenses - reimbursements;
+  return familyEnvelopeLedgerEntries(category).reduce((total, entry) => total + entry.cashDelta, 0);
 }
 
 function familyFundPendingReimbursement() {
@@ -943,12 +954,7 @@ function familyFundPendingReimbursement() {
 }
 
 function familyFundPendingReimbursementByCategory(category) {
-  const cardExpenses = sum(
-    state.data.transactions.filter(t => t.scope === 'family' && t.category === category && t.paymentMethod === 'creditCard'),
-    'amount'
-  );
-  const reimbursements = sum(state.data.familyFundReimbursements.filter(r => r.category === category), 'amount');
-  return cardExpenses - reimbursements;
+  return familyEnvelopeLedgerEntries(category).reduce((total, entry) => total + entry.pendingDelta, 0);
 }
 
 function familyFundEstimatedBalance() {
@@ -956,7 +962,7 @@ function familyFundEstimatedBalance() {
 }
 
 function familyFundEstimatedBalanceByCategory(category) {
-  return familyFundCashBalanceByCategory(category) - familyFundPendingReimbursementByCategory(category);
+  return familyEnvelopeLedgerEntries(category).reduce((total, entry) => total + entry.estimatedDelta, 0);
 }
 
 function familyCategoryTotals(yearMonth) {
@@ -1004,18 +1010,132 @@ function quickReimbRemaining(category, cardId) {
   return charges - linked;
 }
 
-function bankAccountBalance(accountId) {
+const ACCOUNT_LEDGER_PRIORITIES = {
+  manual: 0,
+  personal: 1,
+  family: 2,
+  familyDeposit: 3,
+  cardPayment: 4,
+  familyReimbursement: 5
+};
+
+const ENVELOPE_LEDGER_PRIORITIES = {
+  familyDeposit: 0,
+  familyCash: 1,
+  familyBank: 2,
+  familyCard: 3,
+  familyReimbursement: 4
+};
+
+function ledgerNewestFirst(a, b) {
+  if (a.date !== b.date) return b.date.localeCompare(a.date);
+  const createdCompare = (b.createdAt || '').localeCompare(a.createdAt || '');
+  if (createdCompare !== 0) return createdCompare;
+  if (a.priority !== b.priority) return a.priority - b.priority;
+  return String(a.sourceId).localeCompare(String(b.sourceId));
+}
+
+function accountLedgerEntries(accountId) {
   const account = state.data.bankAccounts.find(a => a.id === accountId);
   if (!account) throw new Error('Account not found: ' + accountId);
-  let balance = account.openingBalance;
-  state.data.accountManualMovements
-    .filter(m => m.accountId === accountId)
-    .forEach(m => { balance += (m.direction === '存入' ? m.amount : -m.amount); });
-  balance -= sum(state.data.transactions.filter(t => t.paymentMethod === 'bankAccount' && t.accountId === accountId), 'amount');
-  balance -= sum(state.data.familyFundDeposits.filter(d => d.fromAccountId === accountId), 'amount');
-  balance -= sum(state.data.creditCardPayments.filter(p => p.fromAccountId === accountId), 'amount');
-  balance += sum(state.data.familyFundReimbursements.filter(r => r.method !== 'cash' && r.toAccountId === accountId), 'amount');
-  return balance;
+  const entries = [];
+  const push = (record, kind, label, delta, title, detail, source) => entries.push({
+    source, sourceId: record.id, date: record.date, createdAt: record.createdAt || '',
+    kind, label, delta, title, detail, priority: ACCOUNT_LEDGER_PRIORITIES[kind], balanceAfter: account.openingBalance
+  });
+
+  state.data.accountManualMovements.filter(m => m.accountId === accountId).forEach(m => {
+    push(m, 'manual', '手動異動', m.direction === '存入' ? m.amount : -m.amount,
+      m.direction + (m.note ? '：' + m.note : ''), m.note || '', 'accountManualMovements');
+  });
+  state.data.transactions.filter(t => t.paymentMethod === 'bankAccount' && t.accountId === accountId).forEach(t => {
+    const kind = t.scope === 'family' ? 'family' : 'personal';
+    push(t, kind, t.scope === 'family' ? '家庭支出' : '個人支出', -t.amount,
+      t.note || t.category, t.category + (t.note ? ' · ' + t.note : ''), 'transactions');
+  });
+  state.data.familyFundDeposits.filter(d => d.fromAccountId === accountId).forEach(d => {
+    push(d, 'familyDeposit', '家庭存入', -d.amount, '轉入' + d.category + '信封',
+      (d.depositedBy || '家庭') + '存入 ' + d.category, 'familyFundDeposits');
+  });
+  state.data.creditCardPayments.filter(p => p.fromAccountId === accountId).forEach(p => {
+    const card = state.data.creditCards.find(c => c.id === p.cardId);
+    push(p, 'cardPayment', '信用卡還款', -p.amount, '繳交' + (card ? card.name : '信用卡'),
+      p.note || (card ? card.name : ''), 'creditCardPayments');
+  });
+  state.data.familyFundReimbursements.filter(r => r.method !== 'cash' && r.toAccountId === accountId).forEach(r => {
+    const card = state.data.creditCards.find(c => c.id === r.cardId);
+    push(r, 'familyReimbursement', '家庭補款', r.amount, r.category + '補款轉入',
+      (card ? card.name + ' · ' : '') + (r.note || r.category), 'familyFundReimbursements');
+  });
+
+  entries.sort(ledgerNewestFirst);
+  let running = account.openingBalance;
+  [...entries].reverse().forEach(entry => {
+    running += entry.delta;
+    entry.balanceAfter = running;
+  });
+  return entries;
+}
+
+function bankAccountBalanceAsOf(accountId, date) {
+  const account = state.data.bankAccounts.find(a => a.id === accountId);
+  if (!account) throw new Error('Account not found: ' + accountId);
+  return account.openingBalance + accountLedgerEntries(accountId)
+    .filter(entry => !date || entry.date <= date)
+    .reduce((total, entry) => total + entry.delta, 0);
+}
+
+function bankAccountBalance(accountId) {
+  return bankAccountBalanceAsOf(accountId, null);
+}
+
+function familyEnvelopeLedgerEntries(category) {
+  if (FAMILY_CATEGORIES.indexOf(category) === -1) throw new Error('Unknown family category: ' + category);
+  const adjustmentIds = new Set(state.data.monthlyReconciliation
+    .filter(r => r.module === 'familyFund' && r.refId === category && r.adjustmentRecordId)
+    .map(r => r.adjustmentRecordId));
+  const entries = [];
+  const push = (record, kind, label, cashDelta, pendingDelta, estimatedDelta, title, detail, source) => entries.push({
+    source, sourceId: record.id, date: record.date, createdAt: record.createdAt || '', kind, label,
+    category, title, detail, cashDelta, pendingDelta, estimatedDelta,
+    priority: ENVELOPE_LEDGER_PRIORITIES[kind], cashAfter: 0, pendingAfter: 0, estimatedAfter: 0
+  });
+
+  state.data.familyFundDeposits.filter(d => d.category === category).forEach(d => {
+    push(d, 'familyDeposit', adjustmentIds.has(d.id) ? '對帳調整' : '家庭基金存入',
+      d.amount, 0, d.amount, (d.depositedBy || '家庭') + '存入', d.fromAccountId ? '由銀行帳戶轉入' : '現金存入', 'familyFundDeposits');
+  });
+  state.data.transactions.filter(t => t.scope === 'family' && t.category === category).forEach(t => {
+    if (t.paymentMethod === 'creditCard') {
+      const card = state.data.creditCards.find(c => c.id === t.cardId);
+      push(t, 'familyCard', '信用卡家庭支出', 0, t.amount, -t.amount,
+        t.note || t.category, card ? card.name : '信用卡', 'transactions');
+    } else {
+      const isBank = t.paymentMethod === 'bankAccount';
+      const acc = isBank ? state.data.bankAccounts.find(a => a.id === t.accountId) : null;
+      push(t, isBank ? 'familyBank' : 'familyCash', adjustmentIds.has(t.id) ? '對帳調整' : (isBank ? '銀行家庭支出' : '現金家庭支出'),
+        -t.amount, 0, -t.amount, t.note || t.category, isBank ? (acc ? acc.name : '銀行帳戶') : '現金', 'transactions');
+    }
+  });
+  state.data.familyFundReimbursements.filter(r => r.category === category).forEach(r => {
+    const card = state.data.creditCards.find(c => c.id === r.cardId);
+    push(r, 'familyReimbursement', '家庭補款', -r.amount, -r.amount, 0,
+      '結清家庭代墊', (card ? card.name + ' · ' : '') + (r.note || (r.method === 'cash' ? '現金結清' : '轉入帳戶')), 'familyFundReimbursements');
+  });
+
+  entries.sort(ledgerNewestFirst);
+  let cash = 0;
+  let pending = 0;
+  let estimated = 0;
+  [...entries].reverse().forEach(entry => {
+    cash += entry.cashDelta;
+    pending += entry.pendingDelta;
+    estimated += entry.estimatedDelta;
+    entry.cashAfter = cash;
+    entry.pendingAfter = pending;
+    entry.estimatedAfter = estimated;
+  });
+  return entries;
 }
 
 function bankAccountsTotalAssets() {
@@ -1770,14 +1890,14 @@ function handleReconcileDiffInput(recorded, options) {
   }
   const diff = actual - recorded;
   if (diff === 0) {
-    area.innerHTML = '<div class="muted" style="margin-top:8px">金額相符，沒有落差。</div>';
+    area.innerHTML = '<div class="status-note" style="margin-top:8px"><b>對帳完成</b>：金額相符，沒有落差。</div>';
     enhanceFormAccessibility(document.getElementById('modal'));
     return;
   }
   const alertClass = diff < 0 ? 'alert-overdue' : 'alert-due';
   if (options.allowAdjustment) {
     area.innerHTML =
-      '<div class="' + alertClass + '" style="margin-top:8px">有落差：' + money(diff) + '（' + (diff < 0 ? '實際比記錄少，可能漏記了支出' : '實際比記錄多，可能漏記了存入') + '）</div>' +
+      '<div class="' + alertClass + '" style="margin-top:8px"><b>待處理</b>：有落差 ' + money(diff) + '（' + (diff < 0 ? '實際比記錄少，可能漏記了支出' : '實際比記錄多，可能漏記了存入') + '）</div>' +
       '<label style="margin-top:8px"><input type="checkbox" id="reconcileCreateAdjustment"> 直接建立對帳調整（' + reconciliationAdjustmentText(diff, options) + '）</label>';
   } else {
     area.innerHTML =
@@ -1786,22 +1906,100 @@ function handleReconcileDiffInput(recorded, options) {
   enhanceFormAccessibility(document.getElementById('modal'));
 }
 
+function bankReconciliationLedgerEntries(accountId, cutoffDate, recentOnly) {
+  const last = lastReconciliation('bankAccount', accountId);
+  return accountLedgerEntries(accountId).filter(entry => {
+    if (cutoffDate && entry.date > cutoffDate) return false;
+    if (!recentOnly || !last) return true;
+    return !!entry.createdAt && entry.createdAt > (last.createdAt || '');
+  });
+}
+
+function signedMoney(delta) {
+  return (delta >= 0 ? '+' : '−') + money(Math.abs(delta));
+}
+
+function ledgerEntryHtml(entry, editAction, extraAfterHtml) {
+  return '<div class="ledger-item" data-ledger-kind="' + entry.kind + '" data-record-id="' + entry.sourceId + '">' +
+    '<div class="ledger-head"><div><span class="ledger-badge">' + escapeHtml(entry.label) + '</span>' +
+    '<div class="ledger-title">' + escapeHtml(entry.title || entry.label) + '</div></div>' +
+    '<span class="ledger-delta ' + (entry.delta >= 0 ? 'income' : 'expense') + '">' + signedMoney(entry.delta) + '</span></div>' +
+    '<div class="muted">' + entry.date + (entry.detail ? ' · ' + escapeHtml(entry.detail) : '') + '</div>' +
+    (extraAfterHtml || '<div class="ledger-after"><span>交易後餘額 <b>' + money(entry.balanceAfter) + '</b></span></div>') +
+    (editAction ? '<div class="action-row"><button class="btn-ghost" onclick="' + editAction + '">查看／編輯來源</button></div>' : '') +
+    '</div>';
+}
+
+function renderBankReconciliationLedger(accountId) {
+  const dateEl = document.getElementById('reconcileDate');
+  const host = document.getElementById('reconcileLedger');
+  if (!dateEl || !host) return;
+  const recentEl = document.getElementById('reconcileRecentOnly');
+  const entries = bankReconciliationLedgerEntries(accountId, dateEl.value, !!(recentEl && recentEl.checked));
+  host.innerHTML = entries.length
+    ? '<div class="ledger-list">' + entries.map(entry => ledgerEntryHtml(entry, '')).join('') + '</div>'
+    : '<div class="muted">這個範圍沒有帳戶流水。</div>';
+}
+
+function refreshBankReconciliation(accountId) {
+  const dateEl = document.getElementById('reconcileDate');
+  if (!dateEl || !dateEl.value) return;
+  const recorded = bankAccountBalanceAsOf(accountId, dateEl.value);
+  const recordedEl = document.getElementById('reconcileRecorded');
+  if (recordedEl) recordedEl.textContent = money(recorded);
+  handleReconcileDiffInput(recorded, {
+    allowAdjustment: true,
+    adjustmentPositive: '建立一筆帳戶存入記錄補齊差額',
+    adjustmentNegative: '建立一筆帳戶提出記錄補齊差額'
+  });
+  renderBankReconciliationLedger(accountId);
+}
+
+function openReconcileQuickAdd(scope) {
+  closeModal();
+  openQuickAdd();
+  const scopeEl = document.getElementById('qaScope');
+  if (scopeEl) {
+    scopeEl.value = scope;
+    renderQuickAddForm();
+  }
+}
+
+function openReconcileMovement(accountId) {
+  closeModal();
+  handleAddMovement(accountId);
+}
+
 function openReconcileBankAccount(accountId) {
   const acc = state.data.bankAccounts.find(a => a.id === accountId);
   if (!acc) { showToast('找不到這個帳戶'); return; }
-  const recorded = bankAccountBalance(accountId);
+  const last = lastReconciliation('bankAccount', accountId);
+  const today = todayLocalDate();
+  const recorded = bankAccountBalanceAsOf(accountId, today);
   openModal('對帳：' + acc.name,
-    '<div class="muted">app 目前算出的餘額</div><div class="big">' + money(recorded) + '</div>' +
+    (last ? '<div class="muted">上次對帳：' + last.date + '，記錄餘額 ' + money(last.recordedBalance) + '</div>' : '<div class="muted">尚未對帳過，本次會顯示全部歷史流水。</div>') +
+    '<label>本次對帳日期</label><input id="reconcileDate" type="date" value="' + today + '" onchange="refreshBankReconciliation(\'' + accountId + '\')">' +
+    '<div class="muted" style="margin-top:10px">截至對帳日期的系統餘額</div><div class="big" id="reconcileRecorded">' + money(recorded) + '</div>' +
     '<label>實際餘額（銀行 App 顯示的數字）</label>' +
-    '<input id="reconcileActual" type="number" oninput="handleReconcileDiffInput(' + recorded + ', { allowAdjustment: true, adjustmentPositive: \'建立一筆帳戶存入記錄補齊差額\', adjustmentNegative: \'建立一筆帳戶提出記錄補齊差額\' })">' +
+    '<input id="reconcileActual" type="number" oninput="refreshBankReconciliation(\'' + accountId + '\')">' +
     '<div id="reconcileDiffArea"></div>' +
-    '<button class="btn-primary" onclick="submitBankReconciliation(\'' + accountId + '\', ' + recorded + ')">記錄對帳結果</button>' +
+    '<div class="action-row"><button class="btn-ghost" onclick="openReconcileQuickAdd(\'personal\')">補記個人支出</button>' +
+    '<button class="btn-ghost" onclick="openReconcileQuickAdd(\'family\')">補記家庭支出</button>' +
+    '<button class="btn-ghost" onclick="openReconcileMovement(\'' + accountId + '\')">手動存入／提出</button></div>' +
+    '<div class="ledger-filter"><label><input type="checkbox" id="reconcileRecentOnly"' + (last ? ' checked' : '') + ' onchange="renderBankReconciliationLedger(\'' + accountId + '\')">只看上次對帳後</label></div>' +
+    '<div id="reconcileLedger"></div>' +
+    '<button class="btn-primary" onclick="submitBankReconciliation(\'' + accountId + '\')">記錄對帳結果</button>' +
     modalCancelButton());
+  refreshBankReconciliation(accountId);
 }
 
-function submitBankReconciliation(accountId, recorded) {
+function submitBankReconciliation(accountId) {
   const actual = parseAnyInt(document.getElementById('reconcileActual').value);
   if (actual === null) { showFieldError('reconcileActual', '請輸入實際餘額（可以是 0 或負數，但不能有文字）'); return; }
+  const dateEl = document.getElementById('reconcileDate');
+  const date = dateEl && dateEl.value ? dateEl.value : todayLocalDate();
+  if (!isValidDateString(date)) { showFieldError('reconcileDate', '請選擇有效的對帳日期'); return; }
+  const recorded = bankAccountBalanceAsOf(accountId, date);
   if (!ensureReconciliationWritable()) return;
   const diff = actual - recorded;
   const wantsAdjustment = diff !== 0 && document.getElementById('reconcileCreateAdjustment') && document.getElementById('reconcileCreateAdjustment').checked;
@@ -1809,16 +2007,16 @@ function submitBankReconciliation(accountId, recorded) {
   if (wantsAdjustment) {
     const movement = addRecord('accountManualMovements', {
       accountId,
-      date: todayLocalDate(),
+      date,
       amount: Math.abs(diff),
       direction: diff > 0 ? '存入' : '提出',
-      note: '對帳調整（' + currentYearMonth() + '）'
+      note: '對帳調整（' + date.slice(0, 7) + '）'
     });
     if (!movement) { showToast('儲存失敗（可能處於鎖定狀態或儲存空間問題），請到備份頁確認'); return; }
     adjustmentRecordId = movement.id;
   }
   const saved = addRecord('monthlyReconciliation', {
-    date: todayLocalDate(),
+    date,
     module: 'bankAccount',
     refId: accountId,
     recordedBalance: recorded,
@@ -1930,20 +2128,58 @@ function submitCardReconciliation(cardId, recorded) {
 }
 
 // ===================== 4. UI：銀行帳戶 =====================
+function accountLedgerSourceMatches(entry, source) {
+  if (!source || source === 'all') return true;
+  if (source === 'family') return entry.kind === 'family' || entry.kind === 'familyDeposit' || entry.kind === 'familyReimbursement';
+  if (source === 'credit') return entry.kind === 'cardPayment';
+  return entry.kind === source;
+}
+
+function filterAccountLedgerEntries(accountId) {
+  const f = listFilters.accountMovements;
+  return accountLedgerEntries(accountId).filter(entry =>
+    (f.showAll || entry.date.slice(0, 7) === f.month) && accountLedgerSourceMatches(entry, f.source)
+  );
+}
+
+function renderAccountLedgerFilterBar() {
+  const f = listFilters.accountMovements;
+  return renderListFilterBar('accountMovements') +
+    '<div class="ledger-filter"><label>流水來源<select id="accountLedgerSource" onchange="handleAccountLedgerSourceChange()">' +
+    '<option value="all"' + optSelected(f.source, 'all') + '>全部</option>' +
+    '<option value="personal"' + optSelected(f.source, 'personal') + '>個人</option>' +
+    '<option value="family"' + optSelected(f.source, 'family') + '>家庭</option>' +
+    '<option value="credit"' + optSelected(f.source, 'credit') + '>信用卡</option>' +
+    '<option value="manual"' + optSelected(f.source, 'manual') + '>手動</option>' +
+    '</select></label></div>';
+}
+
+function handleAccountLedgerSourceChange() {
+  listFilters.accountMovements.source = document.getElementById('accountLedgerSource').value;
+  render();
+}
+
+function openAccountLedgerSource(accountId, source, sourceId) {
+  if (source === 'accountManualMovements') return openMovementForm(accountId, sourceId);
+  if (source === 'transactions') return openEditTransaction(sourceId);
+  if (source === 'familyFundDeposits') return openEditDeposit(sourceId);
+  if (source === 'familyFundReimbursements') return openEditReimbursement(sourceId);
+  if (source === 'creditCardPayments') {
+    const payment = state.data.creditCardPayments.find(p => p.id === sourceId);
+    if (payment) return openPaymentForm(payment.cardId, sourceId);
+  }
+  showToast('找不到這筆流水的原始記錄');
+}
+
 function renderBankAccounts() {
   const bankOptions = state.data.banks.map(b => '<option value="' + b.id + '">' + escapeHtml(b.name) + '</option>').join('');
 
   const accountsHtml = state.data.bankAccounts.map(a => {
     const balance = bankAccountBalance(a.id);
     const bank = state.data.banks.find(b => b.id === a.bankId);
-    const movementsHtml = filterByListMonth('accountMovements', state.data.accountManualMovements.filter(m => m.accountId === a.id))
-      .sort((x, y) => y.date.localeCompare(x.date))
-      .map(m => (
-        '<li data-record-id="' + m.id + '"><div class="row"><span>' + escapeHtml(m.direction) + (m.note ? '：' + escapeHtml(m.note) : '') + '</span><span>' + money(m.amount) + '</span></div>' +
-        '<div class="muted">' + m.date + '</div>' +
-        '<div class="action-row"><button class="btn-ghost" onclick="openMovementForm(\'' + a.id + '\', \'' + m.id + '\')">編輯</button>' +
-        '<button class="btn-danger" onclick="handleDeleteMovement(\'' + m.id + '\')">刪除</button></div></li>'
-      )).join('');
+    const ledger = filterAccountLedgerEntries(a.id);
+    const ledgerHtml = ledger.map(entry => ledgerEntryHtml(entry,
+      'openAccountLedgerSource(\'' + a.id + '\',\'' + entry.source + '\',\'' + entry.sourceId + '\')')).join('');
     return (
       '<div class="card" data-record-id="' + a.id + '">' +
       '<div class="account-balance-row"><b>' + escapeHtml(a.name) + '</b>' +
@@ -1954,14 +2190,15 @@ function renderBankAccounts() {
       '<button class="btn-ghost" onclick="handleAddMovement(\'' + a.id + '\')">手動存入/提出</button> ' +
       '<button class="btn-ghost" onclick="openReconcileBankAccount(\'' + a.id + '\')">對帳</button> ' +
       '<button class="btn-danger" onclick="handleDeleteAccount(\'' + a.id + '\')">刪除帳戶</button>' +
-      '<details class="tucked" open><summary>異動記錄</summary><ul class="list">' + (movementsHtml || '<li class="muted">' + emptyListMessage('accountMovements', '異動記錄') + '</li>') + '</ul></details>' +
+      '<details class="tucked" open><summary>帳戶流水（' + ledger.length + '）</summary>' +
+      '<div class="ledger-list">' + (ledgerHtml || '<div class="muted">' + emptyListMessage('accountMovements', '帳戶流水') + '</div>') + '</div></details>' +
       '</div>'
     );
   }).join('');
 
   return (
     '<div class="page-summary-row"><h2>個人銀行帳戶</h2><span class="big">總資產 ' + money(bankAccountsTotalAssets()) + '</span></div>' +
-    '<div class="card"><h2>異動記錄篩選</h2>' + renderListFilterBar('accountMovements') + '</div>' +
+    '<div class="card"><h2>帳戶流水篩選</h2>' + renderAccountLedgerFilterBar() + '</div>' +
     accountsHtml +
     '<div class="card"><h2>新增帳戶</h2>' +
     '<label>帳戶名稱</label><input id="newAccName" placeholder="例如：國泰儲蓄">' +
@@ -2524,7 +2761,7 @@ function submitEditTransaction(id, scope) {
 let listFilters = {
   personal: { month: currentYearMonth(), showAll: false },
   family: { month: currentYearMonth(), showAll: false },
-  accountMovements: { month: currentYearMonth(), showAll: false },
+  accountMovements: { month: currentYearMonth(), showAll: false, source: 'all' },
   creditCardPayments: { month: currentYearMonth(), showAll: false }
 };
 
@@ -2628,6 +2865,32 @@ function familyCategoryRecordId(category) {
   return 'familyFundCategory-' + FAMILY_CATEGORIES.indexOf(category);
 }
 
+function envelopeDeltaText(label, delta) {
+  if (delta === 0) return label + ' －';
+  return label + ' ' + signedMoney(delta);
+}
+
+function openFamilyEnvelopeSource(source, sourceId) {
+  if (source === 'transactions') return openEditTransaction(sourceId);
+  if (source === 'familyFundDeposits') return openEditDeposit(sourceId);
+  if (source === 'familyFundReimbursements') return openEditReimbursement(sourceId);
+  showToast('找不到這筆信封流水的原始記錄');
+}
+
+function renderFamilyEnvelopeLedger(category) {
+  const entries = familyEnvelopeLedgerEntries(category);
+  if (entries.length === 0) return '<div class="muted">這個信封目前沒有流水。</div>';
+  return '<div class="ledger-list">' + entries.map(entry =>
+    '<div class="ledger-item" data-envelope-category="' + escapeHtml(category) + '" data-ledger-kind="' + entry.kind + '" data-record-id="' + entry.sourceId + '">' +
+    '<div class="ledger-head"><div><span class="ledger-badge">' + escapeHtml(entry.label) + '</span><div class="ledger-title">' + escapeHtml(entry.title || entry.label) + '</div></div>' +
+    '<span class="muted">' + entry.date + '</span></div>' +
+    (entry.detail ? '<div class="muted">' + escapeHtml(entry.detail) + '</div>' : '') +
+    '<div class="ledger-after"><span>' + envelopeDeltaText('現金', entry.cashDelta) + '</span><span>' + envelopeDeltaText('待補', entry.pendingDelta) + '</span><span>' + envelopeDeltaText('預估', entry.estimatedDelta) + '</span></div>' +
+    '<div class="ledger-after"><span>交易後現金 <b>' + money(entry.cashAfter) + '</b></span><span>待補 <b>' + money(entry.pendingAfter) + '</b></span><span>預估 <b>' + money(entry.estimatedAfter) + '</b></span></div>' +
+    '<div class="action-row"><button class="btn-ghost" onclick="openFamilyEnvelopeSource(\'' + entry.source + '\',\'' + entry.sourceId + '\')">查看／編輯來源</button></div></div>'
+  ).join('') + '</div>';
+}
+
 function renderFamilyEnvelopeCards() {
   return FAMILY_CATEGORIES.map(cat => {
     const catCash = familyFundCashBalanceByCategory(cat);
@@ -2638,7 +2901,8 @@ function renderFamilyEnvelopeCards() {
       renderReconciliationHistory('familyFund', cat) +
       '<div class="action-row"><button class="btn-ghost" onclick="openReconcileFamilyFund(\'' + cat + '\')">對帳</button></div>' +
       familyFundStatusHtml(catCash, catPending, catEstimated) +
-      familyPendingByCardHtml(cat);
+      familyPendingByCardHtml(cat) +
+      '<details class="tucked"><summary>信封流水（' + familyEnvelopeLedgerEntries(cat).length + '）</summary>' + renderFamilyEnvelopeLedger(cat) + '</details>';
     return (
       '<div class="card" data-record-id="' + familyCategoryRecordId(cat) + '">' +
       '<div class="label">信封</div><h2>' + escapeHtml(cat) + '</h2>' +
@@ -2652,14 +2916,67 @@ function renderFamilyEnvelopeCards() {
   }).join('');
 }
 
+function depositAccountOptionsHtml(selected) {
+  return '<option value=""' + (selected == null ? ' selected' : '') + '>現金存入（不影響銀行帳戶）</option>' +
+    state.data.bankAccounts.map(a => '<option value="' + a.id + '"' + optSelected(selected, a.id) + '>' +
+      escapeHtml(a.name) + '（目前 ' + money(bankAccountBalance(a.id)) + '）</option>').join('');
+}
+
+function depositImpactPreviewHtml(prefix, editId) {
+  const amountEl = document.getElementById(prefix + 'Amount');
+  const categoryEl = document.getElementById(prefix + 'Category');
+  const accountEl = document.getElementById(prefix + 'Account');
+  if (!amountEl || !categoryEl || !accountEl) return '';
+  const amount = parsePositiveInt(amountEl.value);
+  const category = categoryEl.value;
+  const accountId = accountEl.value || null;
+  const original = editId ? state.data.familyFundDeposits.find(d => d.id === editId) : null;
+  if (amount === null || FAMILY_CATEGORIES.indexOf(category) === -1) {
+    return '<div class="muted">輸入有效金額後，這裡會預覽銀行帳戶與家庭信封的變化。</div>';
+  }
+
+  let envelopeBefore = familyFundCashBalanceByCategory(category);
+  if (original && original.category === category) envelopeBefore -= original.amount;
+  let html = '';
+  if (original && original.category !== category) {
+    const oldEnvelopeCurrent = familyFundCashBalanceByCategory(original.category);
+    html += '<div class="row"><span>原信封 ' + escapeHtml(original.category) + '</span><span>' + money(oldEnvelopeCurrent) + ' → ' + money(oldEnvelopeCurrent - original.amount) + '</span></div>';
+  }
+  html += '<div class="row"><span>' + escapeHtml(category) + '信封</span><span>' + money(envelopeBefore) + ' → ' + money(envelopeBefore + amount) + '</span></div>';
+
+  if (original && original.fromAccountId && original.fromAccountId !== accountId) {
+    const oldAccount = state.data.bankAccounts.find(a => a.id === original.fromAccountId);
+    if (oldAccount) {
+      const oldCurrent = bankAccountBalance(oldAccount.id);
+      html += '<div class="row"><span>原來源 ' + escapeHtml(oldAccount.name) + '</span><span>' + money(oldCurrent) + ' → ' + money(oldCurrent + original.amount) + '</span></div>';
+    }
+  }
+  if (accountId) {
+    const account = state.data.bankAccounts.find(a => a.id === accountId);
+    if (account) {
+      let bankBefore = bankAccountBalance(accountId);
+      if (original && original.fromAccountId === accountId) bankBefore += original.amount;
+      html += '<div class="row"><span>' + escapeHtml(account.name) + '</span><span>' + money(bankBefore) + ' → ' + money(bankBefore - amount) + '</span></div>';
+    }
+  } else {
+    html += '<div class="muted">現金存入，不影響銀行帳戶。</div>';
+  }
+  return html;
+}
+
+function updateDepositImpactPreview(prefix, editId) {
+  const host = document.getElementById(prefix + 'Impact');
+  if (host) host.innerHTML = depositImpactPreviewHtml(prefix, editId || null);
+}
+
 function renderFamilyFund() {
   const accountOptions = state.data.bankAccounts.map(a => '<option value="' + a.id + '">' + escapeHtml(a.name) + '</option>').join('');
 
   const depositsHtml = [...state.data.familyFundDeposits]
     .sort((a, b) => b.date.localeCompare(a.date))
-    .map(d => '<li data-record-id="' + d.id + '"><div class="row"><span>' + escapeHtml(d.depositedBy) + ' 存入 ' + escapeHtml(d.category) + '</span><span>' + money(d.amount) + '</span></div><div class="muted">' + d.date + '</div>' +
+    .map(d => { const sourceAcc = state.data.bankAccounts.find(a => a.id === d.fromAccountId); return '<li data-record-id="' + d.id + '"><div class="row"><span>' + escapeHtml(d.depositedBy) + ' 存入 ' + escapeHtml(d.category) + '</span><span>' + money(d.amount) + '</span></div><div class="muted">' + d.date + ' · ' + (sourceAcc ? '由 ' + escapeHtml(sourceAcc.name) + ' 轉出' : '現金存入（不影響銀行）') + '</div>' +
       '<div class="action-row"><button class="btn-ghost" onclick="openEditDeposit(\'' + d.id + '\')">編輯</button>' +
-      '<button class="btn-danger" onclick="handleDeleteDeposit(\'' + d.id + '\')">刪除</button></div></li>')
+      '<button class="btn-danger" onclick="handleDeleteDeposit(\'' + d.id + '\')">刪除</button></div></li>'; })
     .join('');
 
   const reimbHtml = [...state.data.familyFundReimbursements]
@@ -2690,10 +3007,11 @@ function renderFamilyFund() {
     '<details class="tucked"><summary>存入（' + state.data.familyFundDeposits.length + '）</summary>' +
     '<div class="card">' +
     '<label>存入人</label><select id="depositBy"><option>宗煜</option><option>太太</option></select>' +
-    '<label>類別（要存進哪個信封）</label><select id="depositCategory">' + categoryOptionsHtml('家用') + '</select>' +
-    '<label>金額</label><input id="depositAmount" type="number" min="1">' +
+    '<label>類別（要存進哪個信封）</label><select id="depositCategory" onchange="updateDepositImpactPreview(\'deposit\')">' + categoryOptionsHtml('家用') + '</select>' +
+    '<label>金額</label><input id="depositAmount" type="number" min="1" oninput="updateDepositImpactPreview(\'deposit\')">' +
     '<label>日期</label><input id="depositDate" type="date" value="' + todayLocalDate() + '">' +
-    '<label>轉出帳戶（選填）</label><select id="depositAccount"><option value="">（現金存入）</option>' + accountOptions + '</select>' +
+    '<label>資金來源</label><select id="depositAccount" onchange="updateDepositImpactPreview(\'deposit\')">' + depositAccountOptionsHtml(null) + '</select>' +
+    '<div class="deposit-impact" id="depositImpact"><div class="muted">輸入金額後顯示雙邊餘額變化。</div></div>' +
     '<button class="btn-primary" onclick="handleAddDeposit()">存入</button>' +
     '<ul class="list">' + (depositsHtml || '<li class="muted">尚無存入記錄</li>') + '</ul></div></details>' +
 
@@ -2727,31 +3045,34 @@ function renderFamilyExpenseList() {
 function handleAddDeposit() {
   const amount = parsePositiveInt(document.getElementById('depositAmount').value);
   const date = document.getElementById('depositDate').value;
-  const depositedBy = document.getElementById('depositBy').value;
+  const depositedBy = document.getElementById('depositBy').value.trim();
   const category = document.getElementById('depositCategory').value;
   const fromAccountId = document.getElementById('depositAccount').value || null;
   if (amount === null) { showFieldError('depositAmount', '金額必須是正整數'); return; }
   if (!date) { showFieldError('depositDate', '請選擇日期'); return; }
+  if (!depositedBy) { showFieldError('depositBy', '請選擇或輸入存入人'); return; }
+  if (FAMILY_CATEGORIES.indexOf(category) === -1) { showFieldError('depositCategory', '請選擇有效的家庭信封'); return; }
   const saved = addRecord('familyFundDeposits', { date, amount, depositedBy, category, fromAccountId });
+  if (!saved) { showToast('儲存失敗（可能處於鎖定狀態或儲存空間問題），請到備份頁確認'); return; }
+  const sourceAccount = fromAccountId ? state.data.bankAccounts.find(a => a.id === fromAccountId) : null;
   render();
-  revealRecord(saved && saved.id);
-  showToast('已存入' + category + ' ' + money(amount));
+  revealRecord(saved.id);
+  showToast('已存入' + category + ' ' + money(amount) + (sourceAccount ? '，並由' + sourceAccount.name + '扣除相同金額' : '，未影響銀行帳戶'));
 }
 
 function openEditDeposit(id) {
   const d = state.data.familyFundDeposits.find(x => x.id === id);
   if (!d) { showToast('找不到這筆存入'); return; }
-  const accOptions = '<option value="">（現金存入）</option>' +
-    state.data.bankAccounts.map(a => '<option value="' + a.id + '"' + optSelected(d.fromAccountId, a.id) + '>' + escapeHtml(a.name) + '</option>').join('');
   openModal('編輯存入',
     '<label>存入人</label><input id="editDepBy" value="' + inputVal(d.depositedBy) + '">' +
-    '<label>類別</label><select id="editDepCategory">' + categoryOptionsHtml(d.category) + '</select>' +
-    '<label>金額</label><input id="editDepAmount" type="number" min="1" value="' + inputVal(d.amount) + '">' +
+    '<label>類別</label><select id="editDepCategory" onchange="updateDepositImpactPreview(\'editDep\',\'' + id + '\')">' + categoryOptionsHtml(d.category) + '</select>' +
+    '<label>金額</label><input id="editDepAmount" type="number" min="1" value="' + inputVal(d.amount) + '" oninput="updateDepositImpactPreview(\'editDep\',\'' + id + '\')">' +
     '<label>日期</label><input id="editDepDate" type="date" value="' + d.date + '">' +
-    '<label>轉出帳戶（選填）</label><select id="editDepAccount">' + accOptions + '</select>' +
-    '<div class="muted" style="margin-top:8px">修改金額、類別或帳戶會同步影響對應信封餘額跟個人帳戶餘額。</div>' +
+    '<label>資金來源</label><select id="editDepAccount" onchange="updateDepositImpactPreview(\'editDep\',\'' + id + '\')">' + depositAccountOptionsHtml(d.fromAccountId) + '</select>' +
+    '<div class="deposit-impact" id="editDepImpact"></div>' +
     '<button class="btn-primary" onclick="submitEditDeposit(\'' + id + '\')">儲存修改</button>' +
     modalCancelButton());
+  updateDepositImpactPreview('editDep', id);
 }
 
 function submitEditDeposit(id) {
@@ -2762,13 +3083,15 @@ function submitEditDeposit(id) {
   const depositedBy = document.getElementById('editDepBy').value.trim();
   if (!depositedBy) { showFieldError('editDepBy', '請輸入存入人'); return; }
   const category = document.getElementById('editDepCategory').value;
+  if (FAMILY_CATEGORIES.indexOf(category) === -1) { showFieldError('editDepCategory', '請選擇有效的家庭信封'); return; }
   const patch = { amount, date, depositedBy, category, fromAccountId: document.getElementById('editDepAccount').value || null };
   const saved = updateRecord('familyFundDeposits', id, patch);
   if (!saved) { showToast('儲存失敗（可能處於鎖定狀態或儲存空間問題），請到備份頁確認'); return; }
   closeModal();
   renderKeepScroll();
   revealRecord(id);
-  showToast('已更新存入 ' + money(amount));
+  const sourceAccount = patch.fromAccountId ? state.data.bankAccounts.find(a => a.id === patch.fromAccountId) : null;
+  showToast('已更新存入 ' + money(amount) + (sourceAccount ? '，由' + sourceAccount.name + '扣除' : '，未影響銀行帳戶'));
 }
 
 function handleDeleteDeposit(id) {
