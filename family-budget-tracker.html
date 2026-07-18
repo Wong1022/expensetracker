@@ -591,6 +591,8 @@ function defaultState() {
       creditCardPayments: [],
       bankAccounts: [],
       accountManualMovements: [],
+      cashWallet: null,
+      cashManualMovements: [],
       banks: [],
       categoryKeywords: [
         { category: '餐飲', keywords: ['早餐','午餐','晚餐','麥當勞','超商','7-11','全家','咖啡','餐廳'] },
@@ -661,10 +663,12 @@ function deepValidateAndMigrate(parsed) {
   work.backupReminderSnoozedUntil = normalizeReminderDate(work.backupReminderSnoozedUntil);
   const data = work.data;
   if (!data || typeof data !== 'object') return fail('缺少 data 區塊。');
+  if (!Object.prototype.hasOwnProperty.call(data, 'cashWallet')) data.cashWallet = null;
+  if (!Object.prototype.hasOwnProperty.call(data, 'cashManualMovements')) data.cashManualMovements = [];
 
   const arrayKeys = [
     'transactions', 'familyFundDeposits', 'familyFundReimbursements',
-    'creditCards', 'creditCardPayments', 'bankAccounts', 'accountManualMovements',
+    'creditCards', 'creditCardPayments', 'bankAccounts', 'accountManualMovements', 'cashManualMovements',
     'banks', 'categoryKeywords', 'monthlyReconciliation'
   ];
   for (const k of arrayKeys) {
@@ -753,6 +757,17 @@ function deepValidateAndMigrate(parsed) {
     if (m.direction !== '存入' && m.direction !== '提出') return fail('有一筆帳戶異動的方向不正確。');
   }
 
+  if (data.cashWallet !== null) {
+    if (!data.cashWallet || typeof data.cashWallet !== 'object' || !Number.isInteger(data.cashWallet.openingBalance) || !isValidDateString(data.cashWallet.startDate)) {
+      return fail('欄位 data.cashWallet 格式不正確。');
+    }
+  }
+  for (const m of data.cashManualMovements) {
+    if (badAmount(m)) return fail('有一筆現金異動的金額不是正整數。');
+    if (badDate(m)) return fail('有一筆現金異動的日期格式不正確。');
+    if (m.direction !== '存入' && m.direction !== '提出') return fail('有一筆現金異動的方向不正確。');
+  }
+
   for (const c of data.creditCards) {
     if (!Number.isInteger(c.creditLimit) || c.creditLimit <= 0) return fail('有一張信用卡的額度不正確。');
     if (!Number.isInteger(c.statementDay) || c.statementDay < 1 || c.statementDay > 31) return fail('有一張信用卡的結帳日不正確。');
@@ -771,6 +786,10 @@ function deepValidateAndMigrate(parsed) {
       if (!Number.isInteger(inst.paidPeriods) || inst.paidPeriods < 0 || inst.paidPeriods > inst.totalPeriods) {
         return fail('有一筆分期的已還期數不正確。');
       }
+      if (!Object.prototype.hasOwnProperty.call(inst, 'paidDates')) inst.paidDates = [];
+      if (!Array.isArray(inst.paidDates) || !inst.paidDates.every(isValidDateString) || inst.paidDates.length > inst.paidPeriods) {
+        return fail('有一筆分期的繳款日期不正確。');
+      }
     }
   }
 
@@ -779,12 +798,13 @@ function deepValidateAndMigrate(parsed) {
     if (!a.name) return fail('有一個帳戶缺少名稱。');
   }
 
-  const validReconciliationModules = ['creditCard', 'familyFund', 'bankAccount'];
+  const validReconciliationModules = ['creditCard', 'familyFund', 'bankAccount', 'cashWallet'];
   for (const r of data.monthlyReconciliation) {
     if (badDate(r)) return fail('有一筆對帳紀錄的日期格式不正確。');
     if (validReconciliationModules.indexOf(r.module) === -1) return fail('有一筆對帳紀錄的 module 不正確。');
     if (r.module === 'bankAccount' && !accountIds.has(r.refId)) return fail('有一筆對帳紀錄指向不存在的銀行帳戶。');
     if (r.module === 'creditCard' && !cardIds.has(r.refId)) return fail('有一筆對帳紀錄指向不存在的信用卡。');
+    if (r.module === 'cashWallet' && r.refId !== 'cash') return fail('現金對帳紀錄的 refId 必須是 cash。');
     if (r.module === 'familyFund') {
       if (r.refId == null) r.refId = '家用';
       if (FAMILY_CATEGORIES.indexOf(r.refId) === -1) return fail('家庭基金對帳紀錄的 refId 必須是有效類別。');
@@ -1077,6 +1097,9 @@ const ENVELOPE_LEDGER_PRIORITIES = {
   familyReimbursement: 4
 };
 
+const CASH_LEDGER_PRIORITIES = { manual:0, personalCash:1, familyDeposit:2, cashReimbursement:3 };
+const CARD_LEDGER_PRIORITIES = { personalCharge:0, familyCharge:1, installmentCreated:2, installmentPayment:3, payment:4 };
+
 function ledgerNewestFirst(a, b) {
   if (a.date !== b.date) return b.date.localeCompare(a.date);
   const createdCompare = (b.createdAt || '').localeCompare(a.createdAt || '');
@@ -1138,6 +1161,31 @@ function bankAccountBalanceAsOf(accountId, date) {
 function bankAccountBalance(accountId) {
   return bankAccountBalanceAsOf(accountId, null);
 }
+
+function cashWalletLedgerEntries() {
+  const wallet = state.data.cashWallet;
+  if (!wallet) return [];
+  const entries = [];
+  const push = (record, kind, label, delta, title, detail, source) => {
+    if (!record.date || record.date < wallet.startDate) return;
+    entries.push({ source, sourceId:record.id, date:record.date, createdAt:record.createdAt || '', kind, label, delta,
+      title, detail, priority:CASH_LEDGER_PRIORITIES[kind], balanceAfter:wallet.openingBalance });
+  };
+  state.data.cashManualMovements.forEach(m => push(m,'manual','手動異動',m.direction==='存入'?m.amount:-m.amount,m.direction+(m.note?'：'+m.note:''),m.note||'','cashManualMovements'));
+  state.data.transactions.filter(t => t.scope==='personal' && t.paymentMethod==='cash').forEach(t => push(t,'personalCash','個人支出',-t.amount,t.note||t.category,t.category+(t.note?' · '+t.note:''),'transactions'));
+  state.data.familyFundDeposits.filter(d => d.fromAccountId==null).forEach(d => push(d,'familyDeposit','存入家用',-d.amount,'轉入'+d.category+'信封',(d.depositedBy||'家庭')+'存入','familyFundDeposits'));
+  state.data.familyFundReimbursements.filter(r => r.method==='cash').forEach(r => push(r,'cashReimbursement','家用補款',r.amount,'家用現金結清',r.note||r.category,'familyFundReimbursements'));
+  entries.sort(ledgerNewestFirst);
+  let running=wallet.openingBalance;
+  [...entries].reverse().forEach(entry=>{running+=entry.delta;entry.balanceAfter=running;});
+  return entries;
+}
+
+function cashWalletBalanceAsOf(date) {
+  if (!state.data.cashWallet) return 0;
+  return state.data.cashWallet.openingBalance + cashWalletLedgerEntries().filter(e=>!date||e.date<=date).reduce((n,e)=>n+e.delta,0);
+}
+function cashWalletBalance() { return cashWalletBalanceAsOf(null); }
 
 function familyEnvelopeLedgerEntries(category) {
   if (FAMILY_CATEGORIES.indexOf(category) === -1) throw new Error('Unknown family category: ' + category);
@@ -1225,11 +1273,26 @@ function periodDueDate(card, period) {
 }
 
 function creditCardDueForPeriod(cardId, period) {
-  return sum(
+  const card=state.data.creditCards.find(c=>c.id===cardId);
+  const charges=sum(
     state.data.transactions.filter(t => t.paymentMethod === 'creditCard' && t.cardId === cardId && t.billingMonth === period && t.cardStatus !== '不列入計算'),
     'amount'
   );
+  const installments=card ? card.installments.filter(inst=>installmentPeriodIndex(card,inst,period)>=0 && installmentPeriodIndex(card,inst,period)<inst.totalPeriods).reduce((n,inst)=>n+inst.perInstallment,0) : 0;
+  return charges+installments;
 }
+
+function localDateFromIso(value) {
+  const d = value ? new Date(value) : new Date();
+  if (Number.isNaN(d.getTime())) return todayLocalDate();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function installmentFirstPeriod(card,inst){return getCardBillingMonth(card,inst.date||localDateFromIso(inst.createdAt));}
+function installmentPeriodIndex(card,inst,period){
+  const first=installmentFirstPeriod(card,inst).split('-').map(Number), target=period.split('-').map(Number);
+  return (target[0]-first[0])*12+(target[1]-first[1]);
+}
+function installmentDuePeriodsThrough(card,inst,period){return Math.max(0,Math.min(inst.totalPeriods,installmentPeriodIndex(card,inst,period)+1));}
 
 function installmentRemainingPrincipal(inst) {
   const remainingPeriods = Math.max(0, inst.totalPeriods - inst.paidPeriods);
@@ -1242,12 +1305,31 @@ function creditCardInstallmentPrincipal(cardId) {
   return card ? card.installments.reduce((total, inst) => total + installmentRemainingPrincipal(inst), 0) : 0;
 }
 
+function installmentDatedPayments(inst) {
+  const dates=Array.isArray(inst.paidDates)?inst.paidDates:[];
+  const undated=Math.max(0,inst.paidPeriods-dates.length);
+  return dates.map((date,index)=>{
+    const before=Object.assign({},inst,{paidPeriods:undated+index});
+    const after=Object.assign({},inst,{paidPeriods:undated+index+1});
+    return {date,amount:installmentRemainingPrincipal(before)-installmentRemainingPrincipal(after),index};
+  });
+}
+
+function creditCardLedgerEntries(cardId) {
+  const card=state.data.creditCards.find(c=>c.id===cardId); if(!card) throw new Error('Card not found: '+cardId);
+  const entries=[]; const push=(record,kind,label,delta,title,detail,source,date)=>entries.push({source,sourceId:record.id,date:date||record.date,createdAt:record.createdAt||'',kind,label,delta,title,detail,priority:CARD_LEDGER_PRIORITIES[kind],balanceAfter:0});
+  state.data.transactions.filter(t=>t.paymentMethod==='creditCard'&&t.cardId===cardId&&t.cardStatus!=='不列入計算').forEach(t=>{const family=t.scope==='family';push(t,family?'familyCharge':'personalCharge',family?'家庭刷卡':'個人刷卡',t.amount,t.note||t.category,[t.category,t.note,t.billingMonth,t.cardStatus].filter(Boolean).join(' · '),'transactions');});
+  state.data.creditCardPayments.filter(p=>p.cardId===cardId).forEach(p=>{const a=state.data.bankAccounts.find(x=>x.id===p.fromAccountId);push(p,'payment','還款',-p.amount,'信用卡還款',(a?a.name:'未指定帳戶')+(p.note?' · '+p.note:''),'creditCardPayments');});
+  card.installments.forEach(inst=>{const dated=installmentDatedPayments(inst);const createdDelta=installmentRemainingPrincipal(inst)+dated.reduce((n,p)=>n+p.amount,0);const undated=Math.max(0,inst.paidPeriods-dated.length);push(inst,'installmentCreated','分期建立',createdDelta,inst.note||'分期',money(inst.totalAmount)+(undated?' · 其中 '+undated+' 期為無日期補登':''),'installments',inst.date||localDateFromIso(inst.createdAt));dated.forEach(p=>push(Object.assign({},inst,{id:inst.id+'p'+p.index,createdAt:p.date+'T23:59:59.000Z'}),'installmentPayment','分期繳一期',-p.amount,inst.note||'分期','第 '+(Math.max(0,inst.paidPeriods-dated.length)+p.index+1)+' 期','installments',p.date));});
+  entries.sort(ledgerNewestFirst);let running=0;[...entries].reverse().forEach(e=>{running+=e.delta;e.balanceAfter=running;});return entries;
+}
+
 function cardPaymentReminder(card) {
   const period = currentBillingPeriod(card);
   const dueUpTo = sum(
     state.data.transactions.filter(t => t.paymentMethod === 'creditCard' && t.cardId === card.id && t.cardStatus !== '不列入計算' && t.billingMonth <= period),
     'amount'
-  );
+  ) + card.installments.reduce((total,inst)=>total+inst.perInstallment*installmentDuePeriodsThrough(card,inst,period),0);
   const paid = sum(state.data.creditCardPayments.filter(p => p.cardId === card.id), 'amount');
   const unpaid = dueUpTo - paid;
   if (unpaid <= 0) return { level: 'none', amount: 0, dueDate: null, period };
@@ -1618,7 +1700,7 @@ function renderLastReconciliation(module, refId) {
 }
 
 function reconciliationJumpTarget(module) {
-  return module === 'familyFund' ? 'family' : (module === 'creditCard' ? 'creditCards' : 'bankAccounts');
+  return module === 'familyFund' ? 'family' : (module === 'creditCard' ? 'creditCards' : (module === 'cashWallet' ? 'cashWallet' : 'bankAccounts'));
 }
 
 function reconciliationHistory(module, refId) {
@@ -1702,6 +1784,10 @@ function checkOrphanAndAmounts() {
     if (!(Number.isInteger(m.amount) && m.amount > 0)) problems.push({ type: '金額異常', desc: '一筆帳戶異動金額不是正整數', id: m.id, jump: 'bankAccounts' });
     if (!accountIds.has(m.accountId)) problems.push({ type: '孤兒資料', desc: '一筆帳戶異動指向不存在的帳戶', id: m.id, jump: 'bankAccounts' });
   });
+  state.data.cashManualMovements.forEach(m => {
+    if (!(Number.isInteger(m.amount) && m.amount > 0)) problems.push({ type:'金額異常', desc:'一筆現金異動金額不是正整數', id:m.id, jump:'cashWallet' });
+    if (!isValidDateString(m.date) || (m.direction!=='存入'&&m.direction!=='提出')) problems.push({ type:'資料異常', desc:'一筆現金異動格式不正確', id:m.id, jump:'cashWallet' });
+  });
 
   state.data.familyFundDeposits.forEach(d => {
     if (!(Number.isInteger(d.amount) && d.amount > 0)) problems.push({ type: '金額異常', desc: '一筆家庭基金存入金額不是正整數', id: d.id, jump: 'family' });
@@ -1728,7 +1814,9 @@ function checkOrphanAndAmounts() {
         ? state.data.accountManualMovements.some(m => m.id === r.adjustmentRecordId)
         : r.module === 'familyFund'
           ? (r.diff < 0 ? state.data.transactions : state.data.familyFundDeposits).some(x => x.id === r.adjustmentRecordId)
-          : false;
+          : r.module === 'cashWallet'
+            ? state.data.cashManualMovements.some(m=>m.id===r.adjustmentRecordId)
+            : false;
       if (!adjustmentExists) problems.push({ type: '孤兒資料', desc: '一筆對帳紀錄的調整記錄找不到對應的異動/交易/存入記錄', id: r.id, jump });
     }
   });
@@ -2182,6 +2270,155 @@ function submitCardReconciliation(cardId, recorded) {
   showToast(diff === 0 ? '對帳完成，沒有落差' : '已記錄對帳結果，記得回頭核對消費記錄');
 }
 
+// ===================== 4. UI：個人現金錢包 =====================
+function cashWalletSourceMatches(entry, source) {
+  if (!source || source === 'all') return true;
+  if (source === 'manual') return entry.source === 'cashManualMovements';
+  if (source === 'personal') return entry.source === 'transactions';
+  if (source === 'familyDeposit') return entry.source === 'familyFundDeposits';
+  if (source === 'reimbursement') return entry.source === 'familyFundReimbursements';
+  return false;
+}
+
+function filterCashWalletLedgerEntries() {
+  const f = listFilters.cashWallet;
+  const scoped = cashWalletLedgerEntries().filter(entry =>
+    (f.showAll || entry.date.slice(0, 7) === f.month) && cashWalletSourceMatches(entry, f.source)
+  );
+  return scoped.filter(entry => recordMatchesSearch(entry, f.search, ledgerSearchText));
+}
+
+function handleCashWalletFilterChange() {
+  listFilters.cashWallet.source = document.getElementById('cashWalletSource').value;
+  renderKeepScroll();
+}
+
+function saveCashWalletSettings() {
+  const openingBalance = parseAnyInt(document.getElementById('cashOpeningBalance').value);
+  const startDate = document.getElementById('cashStartDate').value;
+  if (openingBalance === null) { showFieldError('cashOpeningBalance', '起始現金必須是整數'); return; }
+  if (!startDate) { showFieldError('cashStartDate', '請選擇起算日'); return; }
+  if (!ensureWritable()) return;
+  state.data.cashWallet = { openingBalance, startDate };
+  saveState();
+  render();
+  showToast('已更新現金錢包設定');
+}
+
+function cashMovementFieldsHtml(record) {
+  record = record || {};
+  return '<label>類型</label><select id="cashMovementDirection"><option value="存入"' + optSelected(record.direction, '存入') + '>存入</option><option value="提出"' + optSelected(record.direction, '提出') + '>提出</option></select>' +
+    '<label>金額</label><input id="cashMovementAmount" type="number" min="1" inputmode="numeric" value="' + inputVal(record.amount) + '">' +
+    '<label>日期</label><input id="cashMovementDate" type="date" value="' + (record.date || todayLocalDate()) + '">' +
+    '<label>備註（選填）</label><input id="cashMovementNote" value="' + inputVal(record.note) + '">';
+}
+
+function openCashMovementForm(editId) {
+  const record = editId ? state.data.cashManualMovements.find(x => x.id === editId) : null;
+  if (editId && !record) { showToast('找不到這筆現金異動'); return; }
+  openModal(editId ? '編輯現金異動' : '手動存入／提出', cashMovementFieldsHtml(record) +
+    '<button class="btn-primary" onclick="submitCashMovement(' + (editId ? '\'' + editId + '\'' : '') + ')">儲存</button>' + modalCancelButton());
+}
+
+function submitCashMovement(editId) {
+  const amount = parsePositiveInt(document.getElementById('cashMovementAmount').value);
+  const date = document.getElementById('cashMovementDate').value;
+  if (amount === null) { showFieldError('cashMovementAmount', '金額必須是正整數'); return; }
+  if (!date) { showFieldError('cashMovementDate', '請選擇日期'); return; }
+  const fields = { direction: document.getElementById('cashMovementDirection').value, amount, date, note: document.getElementById('cashMovementNote').value.trim() };
+  const saved = editId ? updateRecord('cashManualMovements', editId, fields) : addRecord('cashManualMovements', fields);
+  if (!saved) { showToast('儲存失敗'); return; }
+  closeModal(); renderKeepScroll(); revealRecord(saved.id);
+}
+
+function handleDeleteCashMovement(id) {
+  const movement = state.data.cashManualMovements.find(x => x.id === id);
+  if (!movement) return;
+  openConfirmModal('刪除現金異動', '確定刪除「' + movement.date + ' ' + movement.direction + ' ' + money(movement.amount) + '」？刪除後現金餘額會重新計算。', () => {
+    deleteWithFeedback('cashManualMovements', id, '已刪除現金異動');
+  }, '刪除');
+}
+
+function openCashReconciliation() {
+  const last = lastReconciliation('cashWallet', 'cash');
+  const date = todayLocalDate();
+  const recorded = cashWalletBalanceAsOf(date);
+  openModal('現金對帳', (last ? '<div class="muted">上次對帳：' + last.date + '，記錄餘額 ' + money(last.recordedBalance) + '</div>' : '<div class="muted">尚未對帳過，本次會顯示全部歷史流水。</div>') +
+    '<label>本次對帳日期</label><input id="reconcileDate" type="date" value="' + date + '" onchange="refreshCashReconciliation()">' +
+    '<div class="muted">截至該日的系統現金餘額</div><div class="big" id="reconcileRecorded">' + money(recorded) + '</div>' +
+    '<label>實際現金</label><input id="reconcileActual" type="number" oninput="refreshCashReconciliation()">' +
+    '<div id="reconcileDiffArea"></div>' +
+    '<div class="ledger-filter"><label><input type="checkbox" id="reconcileRecentOnly"' + (last ? ' checked' : '') + ' onchange="renderCashReconciliationLedger()">只看上次對帳後</label></div>' +
+    '<div id="reconcileLedger"></div>' +
+    '<button class="btn-primary" onclick="submitCashReconciliation()">記錄對帳結果</button>' + modalCancelButton());
+  refreshCashReconciliation();
+}
+
+function cashReconciliationLedgerEntries(cutoffDate, recentOnly) {
+  const last = lastReconciliation('cashWallet', 'cash');
+  return cashWalletLedgerEntries().filter(entry => {
+    if (cutoffDate && entry.date > cutoffDate) return false;
+    if (!recentOnly || !last) return true;
+    return !!entry.createdAt && entry.createdAt > (last.createdAt || '');
+  });
+}
+
+function renderCashReconciliationLedger() {
+  const dateEl = document.getElementById('reconcileDate');
+  const host = document.getElementById('reconcileLedger');
+  if (!dateEl || !host) return;
+  const recentEl = document.getElementById('reconcileRecentOnly');
+  const entries = cashReconciliationLedgerEntries(dateEl.value, !!(recentEl && recentEl.checked));
+  host.innerHTML = entries.length ? '<div class="ledger-list">' + entries.map(entry => ledgerEntryHtml(entry, '')).join('') + '</div>' : '<div class="muted">這個範圍沒有現金流水。</div>';
+}
+
+function refreshCashReconciliation() {
+  const dateEl = document.getElementById('reconcileDate');
+  if (!dateEl) return;
+  const recorded = cashWalletBalanceAsOf(dateEl.value);
+  document.getElementById('reconcileRecorded').textContent = money(recorded);
+  handleReconcileDiffInput(recorded, { allowAdjustment: true, adjustmentPositive: '建立一筆現金存入記錄補齊差額', adjustmentNegative: '建立一筆現金提出記錄補齊差額' });
+  renderCashReconciliationLedger();
+}
+
+function submitCashReconciliation() {
+  const date = document.getElementById('reconcileDate').value;
+  const actual = parseAnyInt(document.getElementById('reconcileActual').value);
+  if (!date) { showFieldError('reconcileDate', '請選擇日期'); return; }
+  if (actual === null) { showFieldError('reconcileActual', '請輸入實際現金'); return; }
+  if (!ensureReconciliationWritable()) return;
+  const recorded = cashWalletBalanceAsOf(date), diff = actual - recorded;
+  let adjustmentRecordId = null;
+  const adjustmentEl = document.getElementById('reconcileCreateAdjustment');
+  if (diff !== 0 && adjustmentEl && adjustmentEl.checked) {
+    const movement = addRecord('cashManualMovements', { date, direction: diff > 0 ? '存入' : '提出', amount: Math.abs(diff), note: '對帳調整' });
+    if (!movement) { showToast('建立對帳調整失敗'); return; }
+    adjustmentRecordId = movement.id;
+  }
+  const saved = addRecord('monthlyReconciliation', { date, module: 'cashWallet', refId: 'cash', recordedBalance: recorded, actualBalance: actual, diff, adjustmentRecordId });
+  if (!saved) { showToast('儲存對帳失敗'); return; }
+  closeModal(); renderKeepScroll(); showToast(diff === 0 ? '對帳完成，沒有差額' : '已記錄對帳結果');
+}
+
+function renderCashWallet() {
+  const wallet = state.data.cashWallet;
+  const settings = '<div class="card"><h2>起始設定</h2><label>起始現金</label><input id="cashOpeningBalance" type="number" value="' + (wallet ? wallet.openingBalance : '') + '">' +
+    '<label>起算日</label><input id="cashStartDate" type="date" value="' + (wallet ? wallet.startDate : todayLocalDate()) + '">' +
+    '<button class="btn-primary" onclick="saveCashWalletSettings()">儲存設定</button></div>';
+  if (!wallet) return '<h2>現金</h2><div class="card"><h2>尚未設定</h2><p class="muted">設定起始現金與起算日後，才會開始計算個人現金流水。</p></div>' + settings;
+  const f = listFilters.cashWallet;
+  const ledger = filterCashWalletLedgerEntries();
+  const list = renderDateGroups('cashWallet', ledger, entry => ledgerEntryHtml(entry,
+    entry.source === 'cashManualMovements' ? '<button class="btn-ghost" onclick="openCashMovementForm(\'' + entry.sourceId + '\')">編輯</button><button class="btn-danger" onclick="handleDeleteCashMovement(\'' + entry.sourceId + '\')">刪除</button>' : ''),
+    rows => signedMoney(rows.reduce((n, e) => n + e.delta, 0)), renderDetailEmpty('cashWallet', normalizedSearch(f.search) ? '目前範圍找不到符合的現金流水。' : '尚無現金流水'), 'detail-account', true);
+  return '<h2>現金</h2><div class="card"><div class="metric-row"><span>目前現金餘額</span><span class="big metric-value' + (cashWalletBalance() < 0 ? ' neg' : '') + '">' + money(cashWalletBalance()) + '</span></div>' +
+    renderLastReconciliation('cashWallet', 'cash') + renderReconciliationHistory('cashWallet', 'cash') +
+    '<button class="btn-ghost" onclick="openCashMovementForm()">手動存入／提出</button> <button class="btn-ghost" onclick="openCashReconciliation()">對帳</button></div>' + settings +
+    '<div class="card"><h2>現金流水</h2>' + renderListFilterBar('cashWallet') +
+    '<label>來源快速篩選</label><select id="cashWalletSource" onchange="handleCashWalletFilterChange()"><option value="all"' + optSelected(f.source,'all') + '>全部</option><option value="manual"' + optSelected(f.source,'manual') + '>手動</option><option value="personal"' + optSelected(f.source,'personal') + '>個人支出</option><option value="familyDeposit"' + optSelected(f.source,'familyDeposit') + '>存入家用</option><option value="reimbursement"' + optSelected(f.source,'reimbursement') + '>補款</option></select>' +
+    '<div class="detail-tools">' + renderDetailSearch('cashWallet', '搜尋現金流水', ledger.length, 'cashWallet', false) + '</div>' + list + '</div>';
+}
+
 // ===================== 4. UI：銀行帳戶 =====================
 function accountLedgerSourceMatches(entry, source) {
   if (!source || source === 'all') return true;
@@ -2372,6 +2609,34 @@ function handleDeleteMovement(id) {
 // ===================== 5. UI：信用卡 =====================
 let creditCardViewPeriod = null;
 
+function cardLedgerSourceMatches(entry, source) {
+  if (!source || source === 'all') return true;
+  if (source === 'personal') return entry.kind === 'personalCharge';
+  if (source === 'family') return entry.kind === 'familyCharge';
+  if (source === 'installment') return entry.kind === 'installmentCreated' || entry.kind === 'installmentPayment';
+  if (source === 'payment') return entry.kind === 'payment';
+  return false;
+}
+
+function filterCreditCardLedgerEntries(cardId) {
+  const f = listFilters.creditCardPayments;
+  const scoped = creditCardLedgerEntries(cardId).filter(entry =>
+    (f.showAll || (entry.date || '').slice(0, 7) === f.month) && cardLedgerSourceMatches(entry, f.source)
+  );
+  return scoped.filter(entry => recordMatchesSearch(entry, f.search, ledgerSearchText));
+}
+
+function handleCardLedgerSourceChange() {
+  listFilters.creditCardPayments.source = document.getElementById('cardLedgerSource').value;
+  renderKeepScroll();
+}
+
+function openCardLedgerSource(cardId, kind, sourceId) {
+  if (kind === 'payment') return openPaymentForm(cardId, sourceId);
+  if (kind === 'installmentCreated' || kind === 'installmentPayment') return openInstallmentForm(cardId, sourceId.replace(/p\d+$/, ''));
+  if (kind === 'personalCharge' || kind === 'familyCharge') return openEditTransaction(sourceId, kind === 'familyCharge' ? 'family' : 'personal');
+}
+
 function renderCreditCards() {
   const bankOptions = state.data.banks.map(b => '<option value="' + b.id + '">' + escapeHtml(b.name) + '</option>').join('');
   const accountOptions = state.data.bankAccounts.map(a => '<option value="' + a.id + '">' + escapeHtml(a.name) + '</option>').join('');
@@ -2385,15 +2650,13 @@ function renderCreditCards() {
     const paid = sum(state.data.creditCardPayments.filter(p => p.cardId === c.id), 'amount');
     const avail = creditCardAvailableCredit(c.id);
     const reminder = cardPaymentReminder(c);
-    const paymentsHtml = filterByListMonth('creditCardPayments', state.data.creditCardPayments.filter(p => p.cardId === c.id))
-      .sort((x, y) => y.date.localeCompare(x.date))
-      .map(p => {
-        const account = state.data.bankAccounts.find(a => a.id === p.fromAccountId);
-        return '<li data-record-id="' + p.id + '"><div class="row"><span>' + (account ? escapeHtml(account.name) : '未指定帳戶') + (p.note ? '：' + escapeHtml(p.note) : '') + '</span><span>' + money(p.amount) + '</span></div>' +
-          '<div class="muted">' + p.date + '</div>' +
-          '<div class="action-row"><button class="btn-ghost" onclick="openPaymentForm(\'' + c.id + '\', \'' + p.id + '\')">編輯</button>' +
-          '<button class="btn-danger" onclick="handleDeletePayment(\'' + p.id + '\')">刪除</button></div></li>';
-      }).join('');
+    const cardLedger = filterCreditCardLedgerEntries(c.id);
+    const paymentsHtml = renderDateGroups('card:' + c.id, cardLedger, entry => ledgerEntryHtml(entry,
+      '<button class="btn-ghost" onclick="openCardLedgerSource(\'' + c.id + '\',\'' + entry.kind + '\',\'' + entry.sourceId + '\')">編輯</button>' +
+      (entry.kind === 'payment' ? '<button class="btn-danger" onclick="handleDeletePayment(\'' + entry.sourceId + '\')">刪除</button>' : ''),
+      '<div class="muted">交易後總欠款 ' + money(entry.balanceAfter) + '</div>'),
+      rows => signedMoney(rows.reduce((n, e) => n + e.delta, 0)),
+      renderDetailEmpty('creditCardPayments', normalizedSearch(listFilters.creditCardPayments.search) ? '目前範圍找不到符合的信用卡流水。' : '尚無信用卡流水'), 'detail-account', true);
     const installmentsHtml = c.installments.map(inst => {
       const remaining = installmentRemainingPrincipal(inst);
       const remainingPeriods = Math.max(0, inst.totalPeriods - inst.paidPeriods);
@@ -2432,7 +2695,7 @@ function renderCreditCards() {
       '<div class="muted">「標記已繳一期」只更新分期進度，不會新增信用卡還款紀錄，也不會扣任何銀行帳戶。</div>' +
       '<ul class="list">' + (installmentsHtml || '<li class="muted">尚無分期，先新增第一筆</li>') + '</ul>' +
       '<button class="btn-ghost" onclick="openInstallmentForm(\'' + c.id + '\')">新增分期</button></details>' +
-      '<details class="tucked" open><summary>還款記錄</summary><ul class="list">' + (paymentsHtml || '<li class="muted">' + emptyListMessage('creditCardPayments', '還款記錄') + '</li>') + '</ul></details>' +
+      '<details class="tucked" open><summary>信用卡流水</summary>' + paymentsHtml + '</details>' +
       '</div>'
     );
   }).join('') || '<div class="card"><div class="muted">尚無信用卡，先新增第一張</div></div>';
@@ -2445,7 +2708,9 @@ function renderCreditCards() {
       '<input id="creditCardViewPeriod" type="month" value="' + (creditCardViewPeriod || '') + '" onchange="handleCreditCardPeriodChange()">' +
       '<button class="btn-ghost" onclick="creditCardViewPeriod=null;render()">使用各卡目前帳期</button>' +
       '<div class="muted" style="margin-top:8px">提醒依照「截至本期累計應繳 − 累計已還款」推算；如果已繳信用卡但沒有在這裡記錄還款，可能會誤報逾期。</div>' +
-      '<h2 style="margin-top:14px">還款記錄篩選</h2>' + renderListFilterBar('creditCardPayments') +
+      '<h2 style="margin-top:14px">信用卡流水篩選</h2>' + renderListFilterBar('creditCardPayments') +
+      '<label>來源快速篩選</label><select id="cardLedgerSource" onchange="handleCardLedgerSourceChange()"><option value="all"' + optSelected(listFilters.creditCardPayments.source,'all') + '>全部</option><option value="personal"' + optSelected(listFilters.creditCardPayments.source,'personal') + '>個人刷卡</option><option value="family"' + optSelected(listFilters.creditCardPayments.source,'family') + '>家庭刷卡</option><option value="installment"' + optSelected(listFilters.creditCardPayments.source,'installment') + '>分期</option><option value="payment"' + optSelected(listFilters.creditCardPayments.source,'payment') + '>還款</option></select>' +
+      '<div class="detail-tools">' + renderDetailSearch('creditCardPayments', '搜尋信用卡流水', state.data.creditCards.reduce((n, card) => n + filterCreditCardLedgerEntries(card.id).length, 0), 'card:', true) + '</div>' +
     '</div>' +
     '<h2 class="section-title">信用卡總覽</h2>' + cardsHtml +
     '<h2 class="section-title">新增卡片</h2>' +
@@ -2528,9 +2793,16 @@ function openPaymentForm(cardId, editId) {
   if (!card) { showToast('找不到這張信用卡'); return; }
   const editRec = editId ? state.data.creditCardPayments.find(p => p.id === editId) : null;
   if (editId && !editRec) { showToast('找不到這筆還款'); return; }
+  const activeInstallments = card.installments.filter(i => i.paidPeriods < i.totalPeriods);
+  const suggested = editId ? editRec.amount : Math.max(1, creditCardDueForPeriod(cardId, currentBillingPeriod(card)));
+  const installmentChoices = editId || !activeInstallments.length ? '' :
+    '<div class="card"><b>同時標記分期已繳一期</b><div class="muted">以下預設勾選；未勾選的分期不會變動。</div>' + activeInstallments.map(inst =>
+      '<label><input type="checkbox" class="pay-installment-check" value="' + inst.id + '" checked> ' + escapeHtml(inst.note || '分期') + '，每期 ' + money(inst.perInstallment) + '（' + inst.paidPeriods + '/' + inst.totalPeriods + '）</label>'
+    ).join('') + '</div>';
   openModal(editId ? '編輯還款' : '信用卡還款',
     '<div class="muted">卡片：' + escapeHtml(card.name) + '</div>' +
-    paymentFieldsHtml(editRec) +
+    (!editId ? '<div class="muted">建議金額：' + money(suggested) + '</div>' : '') +
+    paymentFieldsHtml(editId ? editRec : { amount: suggested, date: todayLocalDate() }) + installmentChoices +
     '<button class="btn-primary" onclick="submitPayment(\'' + cardId + '\'' + (editId ? ', \'' + editId + '\'' : '') + ')">儲存</button>' +
     modalCancelButton());
 }
@@ -2545,6 +2817,17 @@ function submitPayment(cardId, editId) {
     ? updateRecord('creditCardPayments', editId, Object.assign({ cardId }, fields))
     : addRecord('creditCardPayments', Object.assign({ cardId }, fields));
   if (!saved) { showToast('儲存失敗（可能處於鎖定狀態或儲存空間問題），請到備份頁確認'); return; }
+  if (!editId) {
+    const checkedIds = Array.from(document.querySelectorAll('.pay-installment-check:checked')).map(el => el.value);
+    const card = state.data.creditCards.find(c => c.id === cardId);
+    for (const id of checkedIds) {
+      const inst = card && card.installments.find(i => i.id === id);
+      if (inst && inst.paidPeriods < inst.totalPeriods) {
+        const updated = updateInstallment(cardId, id, { paidPeriods: inst.paidPeriods + 1, paidDates: (inst.paidDates || []).concat(fields.date) });
+        if (!updated) { showToast('還款已儲存，但分期進度更新失敗，請立即到備份頁確認'); return; }
+      }
+    }
+  }
   closeModal();
   renderKeepScroll();
   revealRecord(saved.id);
@@ -2561,7 +2844,7 @@ function handleDeletePayment(id) {
   const account = p ? state.data.bankAccounts.find(a => a.id === p.fromAccountId) : null;
   const source = p ? (account ? '，來源帳戶：' + account.name : '，來源帳戶：未指定') : '';
   const detail = p ? (p.date + ' ' + money(p.amount) + source + (p.note ? '：' + p.note : '')) : '這筆還款記錄';
-  openConfirmModal('刪除還款', '確定刪除「' + detail + '」？刪除後信用卡欠款會增加，付款帳戶餘額會回補，也可能重新出現到期提醒。', () => {
+  openConfirmModal('刪除還款', '確定刪除「' + detail + '」？刪除後信用卡欠款會增加，付款帳戶餘額會回補，也可能重新出現到期提醒。此操作不會回退分期已繳期數，需要的話請自行編輯分期。', () => {
     deleteWithFeedback('creditCardPayments', id, '已刪除還款');
   }, '刪除');
 }
@@ -2618,6 +2901,12 @@ function openInstallmentForm(cardId, editId) {
 function submitInstallment(cardId, editId) {
   const fields = readInstallmentFields();
   if (!fields) return;
+  const card = state.data.creditCards.find(c => c.id === cardId);
+  const original = editId && card ? card.installments.find(i => i.id === editId) : null;
+  const paidDates = original ? (original.paidDates || []) : [];
+  if (fields.paidPeriods < paidDates.length) { showFieldError('instPaidPeriods', '已還期數不能少於已有日期記錄的期數'); return; }
+  fields.paidDates = paidDates;
+  if (!original) fields.date = todayLocalDate();
   const saved = editId
     ? updateInstallment(cardId, editId, fields)
     : addInstallment(cardId, fields);
@@ -2641,7 +2930,7 @@ function handleAdvanceInstallment(cardId, installmentId) {
   const card = state.data.creditCards.find(c => c.id === cardId);
   const inst = card && card.installments.find(i => i.id === installmentId);
   if (!inst || inst.paidPeriods >= inst.totalPeriods) return;
-  const updated = updateInstallment(cardId, installmentId, { paidPeriods: inst.paidPeriods + 1 });
+  const updated = updateInstallment(cardId, installmentId, { paidPeriods: inst.paidPeriods + 1, paidDates: (inst.paidDates || []).concat(todayLocalDate()) });
   if (!updated) { showToast('儲存失敗（可能處於鎖定狀態或儲存空間問題），請到備份頁確認'); return; }
   renderKeepScroll();
   revealRecord(installmentId);
@@ -2824,7 +3113,8 @@ let listFilters = {
   family: { month: currentYearMonth(), showAll: false, payment: 'all', search: '' },
   familyEnvelope: { month: currentYearMonth(), showAll: false, source: 'all', search: '' },
   accountMovements: { month: currentYearMonth(), showAll: false, source: 'all', search: '' },
-  creditCardPayments: { month: currentYearMonth(), showAll: false }
+  cashWallet: { month: currentYearMonth(), showAll: false, source: 'all', search: '' },
+  creditCardPayments: { month: currentYearMonth(), showAll: false, source: 'all', search: '' }
 };
 
 // 批次 T：日期組開合只保存在本次頁面 session，不寫入 state/localStorage 或備份。
@@ -2959,7 +3249,8 @@ function renderDetailEmpty(scope, message) {
 
 function renderDateGroups(pane, records, itemHtml, summaryHtml, emptyHtml, routeClass, preserveOrder) {
   const forceOpen = !!normalizedSearch(pane.startsWith('account:') ? listFilters.accountMovements.search :
-    pane.startsWith('envelope:') ? listFilters.familyEnvelope.search : listFilters[pane].search);
+    pane.startsWith('envelope:') ? listFilters.familyEnvelope.search :
+    pane.startsWith('card:') ? listFilters.creditCardPayments.search : listFilters[pane].search);
   const groups = groupRecordsByDate(records, preserveOrder);
   if (!groups.length) return emptyHtml;
   const bodyTag = routeClass === 'detail-personal' || routeClass === 'detail-family' ? 'ul' : 'div';
@@ -3557,6 +3848,9 @@ function renderOverview() {
   ).join('') || '<div class="muted">尚無帳戶，先新增第一個</div>';
 
   const totalCardOwed = state.data.creditCards.reduce((total, c) => total + creditCardTotalOwed(c.id), 0);
+  const cashSummary = state.data.cashWallet
+    ? '<div class="big metric-value' + (cashWalletBalance() < 0 ? ' neg' : '') + '">' + money(cashWalletBalance()) + '</div>'
+    : '<div class="muted">尚未設定</div>';
   const cardReminders = state.data.creditCards
     .map(c => ({ card: c, reminder: cardPaymentReminder(c) }))
     .filter(item => item.reminder.level !== 'none');
@@ -3592,6 +3886,7 @@ function renderOverview() {
       '<div class="card tab-personal metro-station station-personal"><div class="station-head"><div class="station-heading">' + iconHtml('personal') + '<div><div class="label">個人站</div><h2>本月個人支出</h2></div></div><button class="btn-ghost station-link" onclick="handleGoToView(\'personal\')">查看明細 ›</button></div><div class="big">' + money(personalMonthlyTotal(ym)) + '</div></div>' +
       '<div class="card tab-account metro-station station-account"><div class="station-head"><div class="station-heading">' + iconHtml('bankAccounts') + '<div><div class="label">銀行站</div><h2>個人銀行帳戶</h2></div></div><button class="btn-ghost station-link" onclick="handleGoToView(\'bankAccounts\')">查看明細 ›</button></div>' + accountsHtml +
         '<div class="metric-row"><b>總資產</b><b class="metric-value">' + money(bankAccountsTotalAssets()) + '</b></div></div>' +
+      '<div class="card tab-account metro-station station-account"><div class="station-head"><div class="station-heading">' + iconHtml('bankAccounts') + '<div><div class="label">現金站</div><h2>個人現金錢包</h2></div></div><button class="btn-ghost station-link" onclick="routeToView(\'cashWallet\');render()">前往現金 ›</button></div>' + cashSummary + '</div>' +
       '<div class="card tab-family metro-station station-family"><div class="station-head"><div class="station-heading">' + iconHtml('family') + '<div><div class="label">家庭站</div><h2>家庭基金（各信封預估餘額）</h2></div></div><button class="btn-ghost station-link" onclick="handleGoToView(\'family\')">查看明細 ›</button></div>' + familyRows + '</div>' +
       '<div class="card tab-credit metro-station station-credit"><div class="station-head"><div class="station-heading">' + iconHtml('creditCards') + '<div><div class="label">信用卡站</div><h2>待繳與到期狀態</h2></div></div><button class="btn-ghost station-link" onclick="handleGoToView(\'creditCards\')">查看明細 ›</button></div>' + cardsHtml + '</div>' +
     '</section>'
@@ -3831,18 +4126,19 @@ const MORE_MENU_ITEMS = [
   { key: 'backup', label: '備份與還原', desc: '匯出、匯入、救援備份', render: renderBackup, accent: 'neutral', icon: 'backup' },
   { key: 'settings', label: '設定', desc: '銀行清單與分類關鍵字', render: renderSettings, accent: 'neutral', icon: 'settings' }
 ];
+const CASH_MENU_ITEM = { key: 'cashWallet', label: '現金', desc: '餘額、流水、手動異動、對帳', render: renderCashWallet, accent: 'account', icon: 'bankAccounts' };
 
 let moreView = null;
 
 function moreMenuItem(key) {
-  return MORE_MENU_ITEMS.find(item => item.key === key) || null;
+  return key === CASH_MENU_ITEM.key ? CASH_MENU_ITEM : (MORE_MENU_ITEMS.find(item => item.key === key) || null);
 }
 
 function renderMoreMenu() {
   return (
     '<h2>更多</h2>' +
     '<div class="card more-menu">' +
-    MORE_MENU_ITEMS.map(item =>
+    [CASH_MENU_ITEM].concat(MORE_MENU_ITEMS).map(item =>
       '<button class="more-menu-item tab-' + item.accent + '" onclick="setMoreView(\'' + item.key + '\')">' +
       '<span class="more-menu-icon">' + iconHtml(item.icon) + '</span>' +
       '<span><span class="more-menu-title">' + escapeHtml(item.label) + '</span>' +
@@ -3892,7 +4188,7 @@ function activeAccent(tab) {
 }
 
 function routeToView(key) {
-  if (key === 'creditCards' || key === 'bankAccounts' || key === 'dataCheck' || key === 'backup' || key === 'settings') {
+  if (key === 'creditCards' || key === 'bankAccounts' || key === 'cashWallet' || key === 'dataCheck' || key === 'backup' || key === 'settings') {
     currentView = 'more';
     moreView = key;
     return;
