@@ -195,6 +195,54 @@
   .ledger-after b { color: var(--ink); font-variant-numeric: tabular-nums; }
   .ledger-filter { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 8px 0 12px; }
   .ledger-filter label { margin-top: 0; }
+  .detail-tools { display: grid; gap: 10px; margin: 10px 0 12px; }
+  .detail-search-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; align-items: end; }
+  .detail-search-row label { min-width: 0; margin: 0; }
+  .detail-search-row input { margin-top: 5px; }
+  .detail-search-row button { width: auto; min-width: 64px; margin: 0; }
+  .detail-filter-label { margin: 0 0 5px; color: var(--ink-muted); font-size: 12px; font-weight: 750; }
+  .detail-filter-chips, .detail-group-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+  .detail-filter-chips button, .detail-group-actions button {
+    width: auto; min-height: 44px; margin: 0; padding: 7px 12px;
+    border: 1px solid var(--border); border-radius: 999px; box-shadow: none;
+    background: var(--field); color: var(--ink); font-size: 13px; font-weight: 700;
+  }
+  .detail-filter-chips button[aria-pressed="true"] {
+    border-color: var(--metro-line); background: #E3ECE5; color: var(--metro-ink);
+    box-shadow: inset 0 0 0 1px var(--metro-mint);
+  }
+  .detail-match-count { margin: -2px 0 0; color: var(--ink-muted); font-size: 12.5px; font-weight: 700; }
+  .detail-date-groups { position: relative; display: grid; gap: 0; margin-top: 8px; padding-left: 18px; }
+  .detail-date-groups::before {
+    content: ""; position: absolute; left: 6px; top: 22px; bottom: 22px;
+    border-left: 2px solid var(--detail-route, var(--metro-sky)); opacity: .55;
+  }
+  .detail-date-group { position: relative; min-width: 0; border-bottom: 1px dashed var(--border); }
+  .detail-date-group:last-child { border-bottom: 0; }
+  .detail-date-group::before {
+    content: ""; position: absolute; z-index: 1; left: -17px; top: 17px; width: 10px; height: 10px;
+    border-radius: 50%; background: var(--detail-route, var(--metro-sky));
+    border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--metro-line);
+  }
+  .detail-date-group > summary {
+    min-height: 44px; display: grid; grid-template-columns: minmax(0,1fr) auto;
+    gap: 10px; align-items: center; padding: 8px 2px 8px 5px; cursor: pointer;
+  }
+  .detail-date-group > summary::marker { color: var(--detail-route, var(--metro-sky)); }
+  .detail-date-main { min-width: 0; }
+  .detail-date-main time { display: block; color: var(--ink); font-weight: 850; font-variant-numeric: tabular-nums; }
+  .detail-date-count { display: block; margin-top: 1px; color: var(--ink-muted); font-size: 11.5px; }
+  .detail-date-total { text-align: right; font: 800 14px/1.2 Bahnschrift,"PingFang TC",sans-serif; font-variant-numeric: tabular-nums; }
+  .detail-date-body { padding: 0 0 10px 5px; }
+  .detail-date-body.list { margin: 0; }
+  .detail-date-body.list > li { list-style: none; }
+  .detail-date-body.list > li:first-child, .detail-date-body.ledger-list > .ledger-item:first-child { border-top: 0; }
+  .detail-date-body.ledger-list { margin-top: 0; }
+  .detail-empty { padding: 14px 4px; color: var(--ink-muted); }
+  .detail-empty button { width: auto; margin: 9px 0 0; }
+  .detail-personal { --detail-route: var(--metro-sand); }
+  .detail-family, .detail-envelope { --detail-route: var(--metro-mint); }
+  .detail-account { --detail-route: var(--metro-sky); }
   .deposit-impact { margin-top: 10px; padding: 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--field); }
   .reconcile-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
   .reconcile-metric { border: 1px solid var(--border); border-radius: 10px; padding: 8px; min-width: 0; }
@@ -507,6 +555,8 @@
     #tabbar button { color: #B4C0BC; }
     #tabbar button.active, #tabbar button.active.tab-personal, #tabbar button.active.tab-family { background: #35443E; box-shadow: 2px 2px 0 #A9BBB7; }
     .station-credit .alert-due, .station-credit .alert-overdue { background: rgba(0,0,0,.16); }
+    .detail-filter-chips button[aria-pressed="true"] { background: #35443E; color: var(--ink); }
+    .detail-date-group::before { border-color: var(--surface); }
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
@@ -1481,6 +1531,11 @@ function revealRecord(id) {
   requestAnimationFrame(() => {
     const el = document.querySelector('[data-record-id="' + id + '"]');
     if (!el) return;
+    const dateGroup = el.closest('.detail-date-group');
+    if (dateGroup) {
+      detailGroupOpenState[detailGroupStateKey(dateGroup.dataset.detailPane, dateGroup.dataset.detailDate)] = true;
+      dateGroup.open = true;
+    }
     el.classList.add('just-saved');
     el.scrollIntoView({ block: 'center', behavior: 'smooth' });
     setTimeout(() => el.classList.remove('just-saved'), 1800);
@@ -2137,13 +2192,15 @@ function accountLedgerSourceMatches(entry, source) {
 
 function filterAccountLedgerEntries(accountId) {
   const f = listFilters.accountMovements;
-  return accountLedgerEntries(accountId).filter(entry =>
+  const scoped = accountLedgerEntries(accountId).filter(entry =>
     (f.showAll || entry.date.slice(0, 7) === f.month) && accountLedgerSourceMatches(entry, f.source)
   );
+  return scoped.filter(entry => recordMatchesSearch(entry, f.search, ledgerSearchText));
 }
 
 function renderAccountLedgerFilterBar() {
   const f = listFilters.accountMovements;
+  const matchCount = state.data.bankAccounts.reduce((total, account) => total + filterAccountLedgerEntries(account.id).length, 0);
   return renderListFilterBar('accountMovements') +
     '<div class="ledger-filter"><label>流水來源<select id="accountLedgerSource" onchange="handleAccountLedgerSourceChange()">' +
     '<option value="all"' + optSelected(f.source, 'all') + '>全部</option>' +
@@ -2151,7 +2208,8 @@ function renderAccountLedgerFilterBar() {
     '<option value="family"' + optSelected(f.source, 'family') + '>家庭</option>' +
     '<option value="credit"' + optSelected(f.source, 'credit') + '>信用卡</option>' +
     '<option value="manual"' + optSelected(f.source, 'manual') + '>手動</option>' +
-    '</select></label></div>';
+    '</select></label></div>' +
+    '<div class="detail-tools">' + renderDetailSearch('accountMovements', '搜尋帳戶流水', matchCount, 'account:', true) + '</div>';
 }
 
 function handleAccountLedgerSourceChange() {
@@ -2178,8 +2236,11 @@ function renderBankAccounts() {
     const balance = bankAccountBalance(a.id);
     const bank = state.data.banks.find(b => b.id === a.bankId);
     const ledger = filterAccountLedgerEntries(a.id);
-    const ledgerHtml = ledger.map(entry => ledgerEntryHtml(entry,
-      'openAccountLedgerSource(\'' + a.id + '\',\'' + entry.source + '\',\'' + entry.sourceId + '\')')).join('');
+    const ledgerHtml = renderDateGroups('account:' + a.id, ledger, entry => ledgerEntryHtml(entry,
+      'openAccountLedgerSource(\'' + a.id + '\',\'' + entry.source + '\',\'' + entry.sourceId + '\')'),
+      group => signedMoney(group.reduce((total, entry) => total + entry.delta, 0)),
+      renderDetailEmpty('accountMovements', normalizedSearch(listFilters.accountMovements.search) ? '目前範圍找不到符合的帳戶流水。' : emptyListMessage('accountMovements', '帳戶流水')),
+      'detail-account', true);
     return (
       '<div class="card" data-record-id="' + a.id + '">' +
       '<div class="account-balance-row"><b>' + escapeHtml(a.name) + '</b>' +
@@ -2191,7 +2252,7 @@ function renderBankAccounts() {
       '<button class="btn-ghost" onclick="openReconcileBankAccount(\'' + a.id + '\')">對帳</button> ' +
       '<button class="btn-danger" onclick="handleDeleteAccount(\'' + a.id + '\')">刪除帳戶</button>' +
       '<details class="tucked" open><summary>帳戶流水（' + ledger.length + '）</summary>' +
-      '<div class="ledger-list">' + (ledgerHtml || '<div class="muted">' + emptyListMessage('accountMovements', '帳戶流水') + '</div>') + '</div></details>' +
+      ledgerHtml + '</details>' +
       '</div>'
     );
   }).join('');
@@ -2759,11 +2820,159 @@ function submitEditTransaction(id, scope) {
 
 // 記錄清單月份篩選——純畫面狀態，不存進 state/localStorage，預設只看本月，避免清單越滾越長
 let listFilters = {
-  personal: { month: currentYearMonth(), showAll: false },
-  family: { month: currentYearMonth(), showAll: false },
-  accountMovements: { month: currentYearMonth(), showAll: false, source: 'all' },
+  personal: { month: currentYearMonth(), showAll: false, payment: 'all', search: '' },
+  family: { month: currentYearMonth(), showAll: false, payment: 'all', search: '' },
+  familyEnvelope: { month: currentYearMonth(), showAll: false, source: 'all', search: '' },
+  accountMovements: { month: currentYearMonth(), showAll: false, source: 'all', search: '' },
   creditCardPayments: { month: currentYearMonth(), showAll: false }
 };
+
+// 批次 T：日期組開合只保存在本次頁面 session，不寫入 state/localStorage 或備份。
+const detailGroupOpenState = Object.create(null);
+
+function detailGroupStateKey(pane, date) {
+  return String(pane) + '\u0000' + String(date);
+}
+
+function transactionNewestFirst(a, b) {
+  if (a.date !== b.date) return b.date.localeCompare(a.date);
+  const createdCompare = (b.createdAt || '').localeCompare(a.createdAt || '');
+  if (createdCompare !== 0) return createdCompare;
+  return String(a.id).localeCompare(String(b.id));
+}
+
+function groupRecordsByDate(records, preserveOrder) {
+  const ordered = preserveOrder ? [...records] : [...records].sort(transactionNewestFirst);
+  const groups = [];
+  ordered.forEach(record => {
+    let group = groups[groups.length - 1];
+    if (!group || group.date !== record.date) {
+      group = { date: record.date, records: [] };
+      groups.push(group);
+    }
+    group.records.push(record);
+  });
+  return groups;
+}
+
+function normalizedSearch(value) {
+  return String(value || '').trim().toLocaleLowerCase();
+}
+
+function recordMatchesSearch(record, query, textBuilder) {
+  const q = normalizedSearch(query);
+  if (!q) return true;
+  return normalizedSearch(textBuilder(record)).includes(q);
+}
+
+function paymentMethodSearchLabel(t) {
+  if (t.paymentMethod === 'cash') return '現金';
+  if (t.paymentMethod === 'bankAccount') {
+    const account = state.data.bankAccounts.find(a => a.id === t.accountId);
+    return '銀行帳戶 ' + (account ? account.name : '');
+  }
+  if (t.paymentMethod === 'creditCard') {
+    const card = state.data.creditCards.find(c => c.id === t.cardId);
+    return '信用卡 ' + (card ? card.name : '') + ' ' + (t.cardStatus || '');
+  }
+  return String(t.paymentMethod || '');
+}
+
+function transactionSearchText(t) {
+  return [t.date, t.category, t.note, paymentMethodSearchLabel(t)].join(' ');
+}
+
+function ledgerSearchText(entry) {
+  return [entry.date, entry.label, entry.title, entry.detail, entry.source, entry.kind].join(' ');
+}
+
+function detailGroupIsOpen(pane, date, index, forceOpen) {
+  if (forceOpen) return true;
+  const key = detailGroupStateKey(pane, date);
+  return Object.prototype.hasOwnProperty.call(detailGroupOpenState, key) ? detailGroupOpenState[key] : index === 0;
+}
+
+function handleDetailGroupToggle(event, pane, date) {
+  const el = event.currentTarget;
+  if (!event.isTrusted) return;
+  if (el.dataset.searchForced === 'true') {
+    el.open = true;
+    return;
+  }
+  detailGroupOpenState[detailGroupStateKey(pane, date)] = el.open;
+}
+
+function setVisibleDetailGroupsOpen(target, open, prefixMatch) {
+  document.querySelectorAll('.detail-date-group').forEach(group => {
+    const pane = group.dataset.detailPane || '';
+    if ((prefixMatch && pane.startsWith(target)) || (!prefixMatch && pane === target)) {
+      detailGroupOpenState[detailGroupStateKey(pane, group.dataset.detailDate)] = open;
+    }
+  });
+  renderKeepScroll();
+}
+
+function renderDetailGroupActions(target, prefixMatch, disabled) {
+  return '<div class="detail-group-actions" aria-label="日期分組操作">' +
+    '<button type="button" onclick="setVisibleDetailGroupsOpen(\'' + target + '\',true,' + !!prefixMatch + ')"' + (disabled ? ' disabled title="搜尋期間會自動展開結果"' : '') + '>展開全部</button>' +
+    '<button type="button" onclick="setVisibleDetailGroupsOpen(\'' + target + '\',false,' + !!prefixMatch + ')"' + (disabled ? ' disabled title="搜尋期間會自動展開結果"' : '') + '>收合全部</button></div>';
+}
+
+function renderDetailSearch(scope, label, matchCount, target, prefixMatch) {
+  const f = listFilters[scope];
+  const query = normalizedSearch(f.search);
+  const id = 'detailSearch_' + scope;
+  return '<div class="detail-search-row"><label for="' + id + '">' + escapeHtml(label) +
+    '<input id="' + id + '" type="search" value="' + inputVal(f.search) + '" placeholder="輸入日期、分類、備註或來源" oninput="handleDetailSearchInput(\'' + scope + '\',\'' + id + '\')"></label>' +
+    '<button type="button" class="btn-ghost" onclick="clearDetailSearch(\'' + scope + '\',\'' + id + '\')"' + (query ? '' : ' disabled') + '>清除</button></div>' +
+    (query ? '<div class="detail-match-count" role="status">找到 ' + matchCount + ' 筆</div>' : '') +
+    renderDetailGroupActions(target, prefixMatch, !!query);
+}
+
+function handleDetailSearchInput(scope, inputId) {
+  const input = document.getElementById(inputId);
+  listFilters[scope].search = input ? input.value : '';
+  render();
+  requestAnimationFrame(() => {
+    const next = document.getElementById(inputId);
+    if (!next) return;
+    next.focus();
+    const end = next.value.length;
+    if (next.setSelectionRange) next.setSelectionRange(end, end);
+  });
+}
+
+function clearDetailSearch(scope, inputId) {
+  listFilters[scope].search = '';
+  renderKeepScroll();
+  requestAnimationFrame(() => {
+    const input = document.getElementById(inputId);
+    if (input) input.focus();
+  });
+}
+
+function renderDetailEmpty(scope, message) {
+  const hasSearch = !!normalizedSearch(listFilters[scope].search);
+  return '<div class="detail-empty">' + escapeHtml(message) +
+    (hasSearch ? '<br><button type="button" class="btn-ghost" onclick="clearDetailSearch(\'' + scope + '\',\'detailSearch_' + scope + '\')">清除搜尋</button>' : '') + '</div>';
+}
+
+function renderDateGroups(pane, records, itemHtml, summaryHtml, emptyHtml, routeClass, preserveOrder) {
+  const forceOpen = !!normalizedSearch(pane.startsWith('account:') ? listFilters.accountMovements.search :
+    pane.startsWith('envelope:') ? listFilters.familyEnvelope.search : listFilters[pane].search);
+  const groups = groupRecordsByDate(records, preserveOrder);
+  if (!groups.length) return emptyHtml;
+  const bodyTag = routeClass === 'detail-personal' || routeClass === 'detail-family' ? 'ul' : 'div';
+  return '<div class="detail-date-groups ' + routeClass + '">' + groups.map((group, index) => {
+    const isOpen = detailGroupIsOpen(pane, group.date, index, forceOpen);
+    return '<details class="detail-date-group" data-detail-pane="' + escapeHtml(pane) + '" data-detail-date="' + group.date + '" data-search-forced="' + forceOpen + '"' + (isOpen ? ' open' : '') +
+      ' ontoggle="handleDetailGroupToggle(event,\'' + pane + '\',\'' + group.date + '\')">' +
+      '<summary><span class="detail-date-main"><time datetime="' + group.date + '">' + group.date + '</time><span class="detail-date-count">' + group.records.length + ' 筆</span></span>' +
+      '<span class="detail-date-total">' + summaryHtml(group.records) + '</span></summary>' +
+      '<' + bodyTag + ' class="detail-date-body ' + (bodyTag === 'ul' ? 'list' : 'ledger-list') + '">' +
+      group.records.map(itemHtml).join('') + '</' + bodyTag + '></details>';
+  }).join('') + '</div>';
+}
 
 function renderListFilterBar(scope) {
   const f = listFilters[scope];
@@ -2785,6 +2994,19 @@ function handleListFilterShowAllChange(scope) {
   render();
 }
 
+function handleTransactionPaymentFilter(scope, payment) {
+  listFilters[scope].payment = payment;
+  renderKeepScroll();
+}
+
+function renderTransactionPaymentFilter(scope) {
+  const selected = listFilters[scope].payment;
+  return '<div><div class="detail-filter-label">付款方式</div><div class="detail-filter-chips" role="group" aria-label="付款方式快速篩選">' +
+    [['all','全部'],['cash','現金'],['bankAccount','銀行'],['creditCard','信用卡']].map(option =>
+      '<button type="button" aria-pressed="' + (selected === option[0]) + '" onclick="handleTransactionPaymentFilter(\'' + scope + '\',\'' + option[0] + '\')">' + option[1] + '</button>'
+    ).join('') + '</div></div>';
+}
+
 function filterByListMonth(scope, records) {
   const f = listFilters[scope];
   if (f.showAll) return records;
@@ -2796,15 +3018,22 @@ function emptyListMessage(scope, noun) {
   return showAll ? ('尚無' + noun) : ('這個月還沒有' + noun + '，可在上方新增');
 }
 
+function transactionListItemHtml(t, includeCategoryInMeta) {
+  return '<li data-record-id="' + t.id + '"><div class="row"><span>' + escapeHtml(t.note || t.category) + '</span><span>' + money(t.amount) + '</span></div>' +
+    '<div class="muted">' + t.date + (includeCategoryInMeta ? ' · ' + escapeHtml(t.category) : '') + ' · ' + paymentMethodLabel(t) + '</div>' +
+    '<div class="action-row"><button class="btn-ghost" onclick="openEditTransaction(\'' + t.id + '\')">編輯</button>' +
+    '<button class="btn-danger" onclick="handleDeleteTransaction(\'' + t.id + '\')">刪除</button></div></li>';
+}
+
 function renderPersonal() {
-  const list = filterByListMonth('personal', state.data.transactions.filter(t => t.scope === 'personal'))
-    .sort((a, b) => b.date.localeCompare(a.date))
-    .map(t => (
-      '<li data-record-id="' + t.id + '"><div class="row"><span>' + escapeHtml(t.note || t.category) + '</span><span>' + money(t.amount) + '</span></div>' +
-      '<div class="muted">' + t.date + ' · ' + escapeHtml(t.category) + ' · ' + paymentMethodLabel(t) + '</div>' +
-      '<div class="action-row"><button class="btn-ghost" onclick="openEditTransaction(\'' + t.id + '\')">編輯</button>' +
-      '<button class="btn-danger" onclick="handleDeleteTransaction(\'' + t.id + '\')">刪除</button></div></li>'
-    )).join('');
+  const f = listFilters.personal;
+  const monthRecords = filterByListMonth('personal', state.data.transactions.filter(t => t.scope === 'personal'));
+  const paymentRecords = monthRecords.filter(t => f.payment === 'all' || t.paymentMethod === f.payment);
+  const records = paymentRecords.filter(t => recordMatchesSearch(t, f.search, transactionSearchText));
+  const list = renderDateGroups('personal', records, t => transactionListItemHtml(t, true),
+    group => money(group.reduce((total, t) => total + t.amount, 0)),
+    renderDetailEmpty('personal', normalizedSearch(f.search) ? '目前範圍找不到符合的個人記錄。' : emptyListMessage('personal', '記錄')),
+    'detail-personal', false);
 
   const catTotals = personalCategoryTotals(currentYearMonth());
   const catRowsHtml = Object.entries(catTotals)
@@ -2817,7 +3046,7 @@ function renderPersonal() {
     renderTransactionForm('personal', 'handleSaveTransaction') +
     '<div class="card"><h2>本月類別支出</h2>' + (catRowsHtml || '<div class="muted">這個月還沒有記錄</div>') + '</div>' +
     '<div class="card"><h2>記錄</h2>' + renderListFilterBar('personal') +
-    '<ul class="list">' + (list || '<li class="muted">' + emptyListMessage('personal', '記錄') + '</li>') + '</ul></div>'
+    '<div class="detail-tools">' + renderTransactionPaymentFilter('personal') + renderDetailSearch('personal', '搜尋個人記錄', records.length, 'personal', false) + '</div>' + list + '</div>'
   );
 }
 
@@ -2877,10 +3106,45 @@ function openFamilyEnvelopeSource(source, sourceId) {
   showToast('找不到這筆信封流水的原始記錄');
 }
 
+function envelopeLedgerSourceMatches(entry, source) {
+  if (!source || source === 'all') return true;
+  if (source === 'deposit') return entry.kind === 'familyDeposit' || (entry.kind === 'familyCash' && entry.label === '對帳調整');
+  if (source === 'cash') return (entry.kind === 'familyCash' && entry.label !== '對帳調整') || entry.kind === 'familyBank';
+  if (source === 'card') return entry.kind === 'familyCard';
+  if (source === 'reimbursement') return entry.kind === 'familyReimbursement';
+  return false;
+}
+
+function filterFamilyEnvelopeLedgerEntries(category) {
+  const f = listFilters.familyEnvelope;
+  const scoped = familyEnvelopeLedgerEntries(category).filter(entry =>
+    (f.showAll || entry.date.slice(0, 7) === f.month) && envelopeLedgerSourceMatches(entry, f.source)
+  );
+  return scoped.filter(entry => recordMatchesSearch(entry, f.search, ledgerSearchText));
+}
+
+function handleFamilyEnvelopeSourceChange() {
+  listFilters.familyEnvelope.source = document.getElementById('familyEnvelopeSource').value;
+  renderKeepScroll();
+}
+
+function renderFamilyEnvelopeFilterBar() {
+  const f = listFilters.familyEnvelope;
+  const matchCount = FAMILY_CATEGORIES.reduce((total, category) => total + filterFamilyEnvelopeLedgerEntries(category).length, 0);
+  return '<div class="card"><h2>信封流水篩選</h2>' + renderListFilterBar('familyEnvelope') +
+    '<div class="ledger-filter"><label>流水來源<select id="familyEnvelopeSource" onchange="handleFamilyEnvelopeSourceChange()">' +
+    '<option value="all"' + optSelected(f.source, 'all') + '>全部</option>' +
+    '<option value="deposit"' + optSelected(f.source, 'deposit') + '>存入／調整</option>' +
+    '<option value="cash"' + optSelected(f.source, 'cash') + '>現金／銀行支出</option>' +
+    '<option value="card"' + optSelected(f.source, 'card') + '>信用卡支出</option>' +
+    '<option value="reimbursement"' + optSelected(f.source, 'reimbursement') + '>補款</option>' +
+    '</select></label></div><div class="detail-tools">' +
+    renderDetailSearch('familyEnvelope', '搜尋所有信封流水', matchCount, 'envelope:', true) + '</div></div>';
+}
+
 function renderFamilyEnvelopeLedger(category) {
-  const entries = familyEnvelopeLedgerEntries(category);
-  if (entries.length === 0) return '<div class="muted">這個信封目前沒有流水。</div>';
-  return '<div class="ledger-list">' + entries.map(entry =>
+  const entries = filterFamilyEnvelopeLedgerEntries(category);
+  return renderDateGroups('envelope:' + category, entries, entry =>
     '<div class="ledger-item" data-envelope-category="' + escapeHtml(category) + '" data-ledger-kind="' + entry.kind + '" data-record-id="' + entry.sourceId + '">' +
     '<div class="ledger-head"><div><span class="ledger-badge">' + escapeHtml(entry.label) + '</span><div class="ledger-title">' + escapeHtml(entry.title || entry.label) + '</div></div>' +
     '<span class="muted">' + entry.date + '</span></div>' +
@@ -2888,10 +3152,13 @@ function renderFamilyEnvelopeLedger(category) {
     '<div class="ledger-after"><span>' + envelopeDeltaText('現金', entry.cashDelta) + '</span><span>' + envelopeDeltaText('待補', entry.pendingDelta) + '</span><span>' + envelopeDeltaText('預估', entry.estimatedDelta) + '</span></div>' +
     '<div class="ledger-after"><span>交易後現金 <b>' + money(entry.cashAfter) + '</b></span><span>待補 <b>' + money(entry.pendingAfter) + '</b></span><span>預估 <b>' + money(entry.estimatedAfter) + '</b></span></div>' +
     '<div class="action-row"><button class="btn-ghost" onclick="openFamilyEnvelopeSource(\'' + entry.source + '\',\'' + entry.sourceId + '\')">查看／編輯來源</button></div></div>'
-  ).join('') + '</div>';
+  , group => signedMoney(group.reduce((total, entry) => total + entry.estimatedDelta, 0)),
+  renderDetailEmpty('familyEnvelope', normalizedSearch(listFilters.familyEnvelope.search) ? '目前範圍找不到符合的信封流水。' : emptyListMessage('familyEnvelope', '信封流水')),
+  'detail-envelope', true);
 }
 
 function renderFamilyEnvelopeCards() {
+  const searchOpen = !!normalizedSearch(listFilters.familyEnvelope.search);
   return FAMILY_CATEGORIES.map(cat => {
     const catCash = familyFundCashBalanceByCategory(cat);
     const catPending = familyFundPendingReimbursementByCategory(cat);
@@ -2902,7 +3169,7 @@ function renderFamilyEnvelopeCards() {
       '<div class="action-row"><button class="btn-ghost" onclick="openReconcileFamilyFund(\'' + cat + '\')">對帳</button></div>' +
       familyFundStatusHtml(catCash, catPending, catEstimated) +
       familyPendingByCardHtml(cat) +
-      '<details class="tucked"><summary>信封流水（' + familyEnvelopeLedgerEntries(cat).length + '）</summary>' + renderFamilyEnvelopeLedger(cat) + '</details>';
+      '<details class="tucked"' + (searchOpen ? ' open' : '') + '><summary>信封流水（' + filterFamilyEnvelopeLedgerEntries(cat).length + '）</summary>' + renderFamilyEnvelopeLedger(cat) + '</details>';
     return (
       '<div class="card" data-record-id="' + familyCategoryRecordId(cat) + '">' +
       '<div class="label">信封</div><h2>' + escapeHtml(cat) + '</h2>' +
@@ -2910,7 +3177,7 @@ function renderFamilyEnvelopeCards() {
       '<div class="metric-row"><span>現金餘額</span><span class="metric-value' + (catCash < 0 ? ' neg' : '') + '">' + money(catCash) + '</span></div>' +
       '<div class="reimb-quick-row"><div class="metric-row"><span>已刷卡待補款</span><span class="metric-value' + (catPending < 0 ? ' neg' : '') + '">' + money(catPending) + (catPending < 0 ? '（已超額補款）' : '') + '</span></div>' +
       '<button class="btn-ghost" onclick="openQuickReimbursement(\'' + cat + '\',null)">記錄補款</button></div>' +
-      '<details class="tucked"><summary>更多</summary>' + moreContent + '</details>' +
+      '<details class="tucked"' + (searchOpen ? ' open' : '') + '><summary>更多</summary>' + moreContent + '</details>' +
       '</div>'
     );
   }).join('');
@@ -3001,6 +3268,7 @@ function renderFamilyFund() {
 
     '<h2 class="section-title">資金總覽（依信封分類）</h2>' +
     '<div class="muted" style="margin-bottom:10px">每個信封分開計算；預估餘額＝現金餘額 − 已刷卡待補款。展開「更多」可以看對帳、提醒跟明細。</div>' +
+    renderFamilyEnvelopeFilterBar() +
     renderFamilyEnvelopeCards() +
 
     '<h2 class="section-title">進階：存入與補款</h2>' +
@@ -3031,15 +3299,21 @@ function renderFamilyFund() {
 }
 
 function renderFamilyExpenseList() {
-  const list = filterByListMonth('family', state.data.transactions.filter(t => t.scope === 'family'))
-    .sort((a, b) => b.date.localeCompare(a.date))
-    .map(t => (
-      '<li data-record-id="' + t.id + '"><div class="row"><span>' + escapeHtml(t.category) + '：' + escapeHtml(t.note) + '</span><span>' + money(t.amount) + '</span></div>' +
-      '<div class="muted">' + t.date + ' · ' + paymentMethodLabel(t) + '</div>' +
-      '<div class="action-row"><button class="btn-ghost" onclick="openEditTransaction(\'' + t.id + '\')">編輯</button>' +
-      '<button class="btn-danger" onclick="handleDeleteTransaction(\'' + t.id + '\')">刪除</button></div></li>'
-    )).join('');
-  return renderListFilterBar('family') + '<ul class="list">' + (list || '<li class="muted">' + emptyListMessage('family', '記錄') + '</li>') + '</ul>';
+  const f = listFilters.family;
+  const monthRecords = filterByListMonth('family', state.data.transactions.filter(t => t.scope === 'family'));
+  const paymentRecords = monthRecords.filter(t => f.payment === 'all' || t.paymentMethod === f.payment);
+  const records = paymentRecords.filter(t => recordMatchesSearch(t, f.search, transactionSearchText));
+  const list = renderDateGroups('family', records, t =>
+    '<li data-record-id="' + t.id + '"><div class="row"><span>' + escapeHtml(t.category) + '：' + escapeHtml(t.note) + '</span><span>' + money(t.amount) + '</span></div>' +
+    '<div class="muted">' + t.date + ' · ' + paymentMethodLabel(t) + '</div>' +
+    '<div class="action-row"><button class="btn-ghost" onclick="openEditTransaction(\'' + t.id + '\')">編輯</button>' +
+    '<button class="btn-danger" onclick="handleDeleteTransaction(\'' + t.id + '\')">刪除</button></div></li>',
+    group => money(group.reduce((total, t) => total + t.amount, 0)),
+    renderDetailEmpty('family', normalizedSearch(f.search) ? '目前範圍找不到符合的家庭支出。' : emptyListMessage('family', '記錄')),
+    'detail-family', false);
+  return renderListFilterBar('family') + '<div class="detail-tools">' +
+    renderTransactionPaymentFilter('family') + renderDetailSearch('family', '搜尋家庭支出', records.length, 'family', false) +
+    '</div>' + list;
 }
 
 function handleAddDeposit() {
