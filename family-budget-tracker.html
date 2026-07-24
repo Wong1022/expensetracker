@@ -211,6 +211,12 @@
     border-color: var(--metro-line); background: #E3ECE5; color: var(--metro-ink);
     box-shadow: inset 0 0 0 1px var(--metro-mint);
   }
+  .quick-add-scope-toggle {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;
+  }
+  .quick-add-scope-toggle button {
+    width: 100%; min-height: 56px; padding: 12px 16px; font-size: 16px;
+  }
   .detail-match-count { margin: -2px 0 0; color: var(--ink-muted); font-size: 12.5px; font-weight: 700; }
   .detail-date-groups { position: relative; display: grid; gap: 0; margin-top: 8px; padding-left: 18px; }
   .detail-date-groups::before {
@@ -2719,9 +2725,9 @@ function renderCreditCards() {
     '<label>發卡銀行（信用卡所屬銀行，不是還款帳戶）</label><select id="newCardBank"><option value="">（不指定）</option>' + bankOptions + '</select>' +
     '<label>清單沒有？新增發卡銀行（選填）</label><input id="newCardBankName" placeholder="例如：玉山、匯豐、樂天">' +
     '<div class="muted">若你只新增了帳戶但沒有設定所屬銀行，這裡不會自動出現；請在這裡新增發卡銀行，或回帳戶頁補上所屬銀行。</div>' +
-    '<label>額度</label><input id="newCardLimit" type="number">' +
-    '<label>結帳日（幾號）</label><input id="newCardStatementDay" type="number" min="1" max="31">' +
-    '<label>繳款到期日（幾號）</label><input id="newCardDueDay" type="number" min="1" max="31">' +
+    '<label>額度</label><input id="newCardLimit" type="number" inputmode="numeric">' +
+    '<label>結帳日（幾號）</label><input id="newCardStatementDay" type="number" inputmode="numeric" min="1" max="31">' +
+    '<label>繳款到期日（幾號）</label><input id="newCardDueDay" type="number" inputmode="numeric" min="1" max="31">' +
     '<button class="btn-primary" onclick="handleAddCard()">新增卡片</button></div>' +
     (accountOptions ? '' : '<p class="muted">沒有個人銀行帳戶也可以新增信用卡；記錄還款時可選「不指定帳戶」，只減少信用卡欠款，不扣個人帳戶。</p>')
   );
@@ -2857,10 +2863,10 @@ function installmentFieldsHtml(record) {
   record = record || {};
   return (
     '<label>項目備注（選填，例如：冰箱、筆電）</label><input id="instNote" value="' + inputVal(record.note) + '">' +
-    '<label>分期總額</label><input id="instTotalAmount" type="number" min="1" value="' + inputVal(record.totalAmount) + '" oninput="handleInstallmentAmountInput()">' +
-    '<label>總期數</label><input id="instTotalPeriods" type="number" min="1" value="' + inputVal(record.totalPeriods) + '" oninput="handleInstallmentAmountInput()">' +
-    '<label>每期金額（可手動調整，銀行分期常有尾差）</label><input id="instPerInstallment" type="number" min="1" value="' + inputVal(record.perInstallment) + '" data-user-edited="' + (record.perInstallment ? '1' : '0') + '" oninput="this.dataset.userEdited=\'1\'">' +
-    '<label>已還期數（新登記通常是 0；補登已在繳的分期，可填目前實際還了幾期）</label><input id="instPaidPeriods" type="number" min="0" value="' + inputVal(record.paidPeriods != null ? record.paidPeriods : 0) + '">'
+    '<label>分期總額</label><input id="instTotalAmount" type="number" inputmode="numeric" min="1" value="' + inputVal(record.totalAmount) + '" oninput="handleInstallmentAmountInput()">' +
+    '<label>總期數</label><input id="instTotalPeriods" type="number" inputmode="numeric" min="1" value="' + inputVal(record.totalPeriods) + '" oninput="handleInstallmentAmountInput()">' +
+    '<label>每期金額（可手動調整，銀行分期常有尾差）</label><input id="instPerInstallment" type="number" inputmode="numeric" min="1" value="' + inputVal(record.perInstallment) + '" data-user-edited="' + (record.perInstallment ? '1' : '0') + '" oninput="this.dataset.userEdited=\'1\'">' +
+    '<label>已還期數（新登記通常是 0；補登已在繳的分期，可填目前實際還了幾期）</label><input id="instPaidPeriods" type="number" inputmode="numeric" min="0" value="' + inputVal(record.paidPeriods != null ? record.paidPeriods : 0) + '">'
   );
 }
 
@@ -2955,7 +2961,7 @@ function transactionFieldsHtml(scope, idPrefix, record, showBillingMonth) {
     : '<label>類別（會依備注自動建議，也可以手動選）</label><select id="' + idPrefix + 'Category">' + personalCategoryOptionsHtml(record.category || '其他') + '</select>';
 
   return (
-    '<label>金額</label><input id="' + idPrefix + 'Amount" type="number" min="1" value="' + inputVal(record.amount) + '">' +
+    '<label>金額</label><input id="' + idPrefix + 'Amount" type="number" inputmode="numeric" min="1" value="' + inputVal(record.amount) + '">' +
     '<label>日期</label><input id="' + idPrefix + 'Date" type="date" value="' + (record.date || todayLocalDate()) + '">' +
     '<label>備注</label><input id="' + idPrefix + 'Note" value="' + inputVal(record.note) + '" oninput="handleNoteInput(\'' + scope + '\', \'' + idPrefix + '\')">' +
     categoryField +
@@ -3060,14 +3066,23 @@ function quickAddFormBody(scope) {
 
 function openQuickAdd() {
   openModal('快速記帳',
-    '<label>記到哪裡</label><select id="qaScope" onchange="renderQuickAddForm()">' +
-      '<option value="personal">個人支出</option><option value="family">家庭支出</option></select>' +
+    '<div><div class="detail-filter-label">記到哪裡</div><div id="qaScopeButtons" class="detail-filter-chips quick-add-scope-toggle" role="group" aria-label="記帳範圍" data-scope="personal">' +
+      '<button id="qaScopePersonal" type="button" aria-pressed="true" onclick="setQuickAddScope(\'personal\')">個人</button>' +
+      '<button id="qaScopeFamily" type="button" aria-pressed="false" onclick="setQuickAddScope(\'family\')">家庭</button>' +
+    '</div></div>' +
     '<div id="qaFormHost"></div>');
   renderQuickAddForm();
 }
 
+function setQuickAddScope(scope) {
+  document.getElementById('qaScopeButtons').dataset.scope = scope;
+  renderQuickAddForm();
+}
+
 function renderQuickAddForm() {
-  const scope = document.getElementById('qaScope').value;
+  const scope = document.getElementById('qaScopeButtons').dataset.scope;
+  document.getElementById('qaScopePersonal').setAttribute('aria-pressed', scope === 'personal');
+  document.getElementById('qaScopeFamily').setAttribute('aria-pressed', scope === 'family');
   document.getElementById('qaFormHost').innerHTML = quickAddFormBody(scope);
   enhanceFormAccessibility(document.getElementById('modal'));
   handlePaymentMethodChange('qa', scope);
@@ -3567,7 +3582,7 @@ function renderFamilyFund() {
     '<div class="card">' +
     '<label>存入人</label><select id="depositBy"><option>宗煜</option><option>太太</option></select>' +
     '<label>類別（要存進哪個信封）</label><select id="depositCategory" onchange="updateDepositImpactPreview(\'deposit\')">' + categoryOptionsHtml('家用') + '</select>' +
-    '<label>金額</label><input id="depositAmount" type="number" min="1" oninput="updateDepositImpactPreview(\'deposit\')">' +
+    '<label>金額</label><input id="depositAmount" type="number" inputmode="numeric" min="1" oninput="updateDepositImpactPreview(\'deposit\')">' +
     '<label>日期</label><input id="depositDate" type="date" value="' + todayLocalDate() + '">' +
     '<label>資金來源</label><select id="depositAccount" onchange="updateDepositImpactPreview(\'deposit\')">' + depositAccountOptionsHtml(null) + '</select>' +
     '<div class="deposit-impact" id="depositImpact"><div class="muted">輸入金額後顯示雙邊餘額變化。</div></div>' +
@@ -3577,7 +3592,7 @@ function renderFamilyFund() {
     '<details class="tucked"><summary>補款（' + state.data.familyFundReimbursements.length + '）</summary>' +
     '<div class="card">' +
     '<label>補哪個信封的刷卡支出</label><select id="reimbCategory">' + categoryOptionsHtml('家用') + '</select>' +
-    '<label>金額</label><input id="reimbAmount" type="number" min="1">' +
+    '<label>金額</label><input id="reimbAmount" type="number" inputmode="numeric" min="1">' +
     '<label>日期</label><input id="reimbDate" type="date" value="' + todayLocalDate() + '">' +
     '<label>補款方式</label><select id="reimbMethod" onchange="handleReimbursementMethodChange(\'reimb\')"><option value="bankAccount">轉入個人帳戶</option><option value="cash">現金結清</option></select>' +
     '<div id="reimbAccountWrap"><label>撥入帳戶</label><select id="reimbAccount">' + accountOptions + '</select></div>' +
@@ -3631,7 +3646,7 @@ function openEditDeposit(id) {
   openModal('編輯存入',
     '<label>存入人</label><input id="editDepBy" value="' + inputVal(d.depositedBy) + '">' +
     '<label>類別</label><select id="editDepCategory" onchange="updateDepositImpactPreview(\'editDep\',\'' + id + '\')">' + categoryOptionsHtml(d.category) + '</select>' +
-    '<label>金額</label><input id="editDepAmount" type="number" min="1" value="' + inputVal(d.amount) + '" oninput="updateDepositImpactPreview(\'editDep\',\'' + id + '\')">' +
+    '<label>金額</label><input id="editDepAmount" type="number" inputmode="numeric" min="1" value="' + inputVal(d.amount) + '" oninput="updateDepositImpactPreview(\'editDep\',\'' + id + '\')">' +
     '<label>日期</label><input id="editDepDate" type="date" value="' + d.date + '">' +
     '<label>資金來源</label><select id="editDepAccount" onchange="updateDepositImpactPreview(\'editDep\',\'' + id + '\')">' + depositAccountOptionsHtml(d.fromAccountId) + '</select>' +
     '<div class="deposit-impact" id="editDepImpact"></div>' +
@@ -3796,7 +3811,7 @@ function openEditReimbursement(id) {
   const method = r.method === 'cash' ? 'cash' : 'bankAccount';
   openModal('編輯補款',
     '<label>補哪個信封的刷卡支出</label><select id="editReimbCategory">' + categoryOptionsHtml(r.category) + '</select>' +
-    '<label>金額</label><input id="editReimbAmount" type="number" min="1" value="' + inputVal(r.amount) + '">' +
+    '<label>金額</label><input id="editReimbAmount" type="number" inputmode="numeric" min="1" value="' + inputVal(r.amount) + '">' +
     '<label>日期</label><input id="editReimbDate" type="date" value="' + r.date + '">' +
     '<label>補款方式</label><select id="editReimbMethod" onchange="handleReimbursementMethodChange(\'editReimb\')"><option value="bankAccount"' + optSelected(method, 'bankAccount') + '>轉入個人帳戶</option><option value="cash"' + optSelected(method, 'cash') + '>現金結清</option></select>' +
     '<div id="editReimbAccountWrap"' + (method === 'cash' ? ' style="display:none"' : '') + '><label>撥入帳戶</label><select id="editReimbAccount">' + accOptions + '</select></div>' +
