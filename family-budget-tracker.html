@@ -2068,14 +2068,17 @@ function signedMoney(delta) {
   return (delta >= 0 ? '+' : '−') + money(Math.abs(delta));
 }
 
-function ledgerEntryHtml(entry, editAction, extraAfterHtml) {
+function ledgerEntryHtml(entry, editAction, extraAfterHtml, deleteAction) {
   return '<div class="ledger-item" data-ledger-kind="' + entry.kind + '" data-record-id="' + entry.sourceId + '">' +
     '<div class="ledger-head"><div><span class="ledger-badge">' + escapeHtml(entry.label) + '</span>' +
     '<div class="ledger-title">' + escapeHtml(entry.title || entry.label) + '</div></div>' +
     '<span class="ledger-delta ' + (entry.delta >= 0 ? 'income' : 'expense') + '">' + signedMoney(entry.delta) + '</span></div>' +
     '<div class="muted">' + entry.date + (entry.detail ? ' · ' + escapeHtml(entry.detail) : '') + '</div>' +
     (extraAfterHtml || '<div class="ledger-after"><span>交易後餘額 <b>' + money(entry.balanceAfter) + '</b></span></div>') +
-    (editAction ? '<div class="action-row"><button class="btn-ghost" onclick="' + editAction + '">查看／編輯來源</button></div>' : '') +
+    ((editAction || deleteAction) ? '<div class="action-row">' +
+      (editAction ? '<button class="btn-ghost" onclick="' + editAction + '">查看／編輯來源</button>' : '') +
+      (deleteAction ? '<button class="btn-danger" onclick="' + deleteAction + '">刪除</button>' : '') +
+    '</div>' : '') +
     '</div>';
 }
 
@@ -2415,7 +2418,9 @@ function renderCashWallet() {
   const f = listFilters.cashWallet;
   const ledger = filterCashWalletLedgerEntries();
   const list = renderDateGroups('cashWallet', ledger, entry => ledgerEntryHtml(entry,
-    entry.source === 'cashManualMovements' ? '<button class="btn-ghost" onclick="openCashMovementForm(\'' + entry.sourceId + '\')">編輯</button><button class="btn-danger" onclick="handleDeleteCashMovement(\'' + entry.sourceId + '\')">刪除</button>' : ''),
+    entry.source === 'cashManualMovements' ? 'openCashMovementForm(\'' + entry.sourceId + '\')' : '',
+    null,
+    entry.source === 'cashManualMovements' ? 'handleDeleteCashMovement(\'' + entry.sourceId + '\')' : ''),
     rows => signedMoney(rows.reduce((n, e) => n + e.delta, 0)), renderDetailEmpty('cashWallet', normalizedSearch(f.search) ? '目前範圍找不到符合的現金流水。' : '尚無現金流水'), 'detail-account', true);
   return '<h2>現金</h2><div class="card"><div class="metric-row"><span>目前現金餘額</span><span class="big metric-value' + (cashWalletBalance() < 0 ? ' neg' : '') + '">' + money(cashWalletBalance()) + '</span></div>' +
     renderLastReconciliation('cashWallet', 'cash') + renderReconciliationHistory('cashWallet', 'cash') +
@@ -2480,7 +2485,9 @@ function renderBankAccounts() {
     const bank = state.data.banks.find(b => b.id === a.bankId);
     const ledger = filterAccountLedgerEntries(a.id);
     const ledgerHtml = renderDateGroups('account:' + a.id, ledger, entry => ledgerEntryHtml(entry,
-      'openAccountLedgerSource(\'' + a.id + '\',\'' + entry.source + '\',\'' + entry.sourceId + '\')'),
+      'openAccountLedgerSource(\'' + a.id + '\',\'' + entry.source + '\',\'' + entry.sourceId + '\')',
+      null,
+      entry.kind === 'manual' ? 'handleDeleteMovement(\'' + entry.sourceId + '\')' : ''),
       group => signedMoney(group.reduce((total, entry) => total + entry.delta, 0)),
       renderDetailEmpty('accountMovements', normalizedSearch(listFilters.accountMovements.search) ? '目前範圍找不到符合的帳戶流水。' : emptyListMessage('accountMovements', '帳戶流水')),
       'detail-account', true);
@@ -2643,9 +2650,18 @@ function openCardLedgerSource(cardId, kind, sourceId) {
   if (kind === 'personalCharge' || kind === 'familyCharge') return openEditTransaction(sourceId, kind === 'familyCharge' ? 'family' : 'personal');
 }
 
+function creditCardBillingMonthHtml(entry) {
+  if (entry.kind !== 'personalCharge' && entry.kind !== 'familyCharge') return '';
+  const transaction = state.data.transactions.find(t => t.id === entry.sourceId);
+  return transaction && transaction.billingMonth
+    ? '<div class="card-billing-month"><span class="ledger-badge">帳單 ' + escapeHtml(transaction.billingMonth) + '</span></div>'
+    : '';
+}
+
 function renderCreditCards() {
   const bankOptions = state.data.banks.map(b => '<option value="' + b.id + '">' + escapeHtml(b.name) + '</option>').join('');
   const accountOptions = state.data.bankAccounts.map(a => '<option value="' + a.id + '">' + escapeHtml(a.name) + '</option>').join('');
+  const cardLedgers = new Map(state.data.creditCards.map(card => [card.id, filterCreditCardLedgerEntries(card.id)]));
 
   const cardsHtml = state.data.creditCards.map(c => {
     const bank = state.data.banks.find(b => b.id === c.bankId);
@@ -2656,11 +2672,11 @@ function renderCreditCards() {
     const paid = sum(state.data.creditCardPayments.filter(p => p.cardId === c.id), 'amount');
     const avail = creditCardAvailableCredit(c.id);
     const reminder = cardPaymentReminder(c);
-    const cardLedger = filterCreditCardLedgerEntries(c.id);
+    const cardLedger = cardLedgers.get(c.id) || [];
     const paymentsHtml = renderDateGroups('card:' + c.id, cardLedger, entry => ledgerEntryHtml(entry,
-      '<button class="btn-ghost" onclick="openCardLedgerSource(\'' + c.id + '\',\'' + entry.kind + '\',\'' + entry.sourceId + '\')">編輯</button>' +
-      (entry.kind === 'payment' ? '<button class="btn-danger" onclick="handleDeletePayment(\'' + entry.sourceId + '\')">刪除</button>' : ''),
-      '<div class="muted">交易後總欠款 ' + money(entry.balanceAfter) + '</div>'),
+      'openCardLedgerSource(\'' + c.id + '\',\'' + entry.kind + '\',\'' + entry.sourceId + '\')',
+      '<div class="muted">交易後總欠款 ' + money(entry.balanceAfter) + '</div>' + creditCardBillingMonthHtml(entry),
+      entry.kind === 'payment' ? 'handleDeletePayment(\'' + entry.sourceId + '\')' : ''),
       rows => signedMoney(rows.reduce((n, e) => n + e.delta, 0)),
       renderDetailEmpty('creditCardPayments', normalizedSearch(listFilters.creditCardPayments.search) ? '目前範圍找不到符合的信用卡流水。' : '尚無信用卡流水'), 'detail-account', true);
     const installmentsHtml = c.installments.map(inst => {
@@ -2713,10 +2729,11 @@ function renderCreditCards() {
       '<label>查看帳期（留空＝各卡目前帳期）</label>' +
       '<input id="creditCardViewPeriod" type="month" value="' + (creditCardViewPeriod || '') + '" onchange="handleCreditCardPeriodChange()">' +
       '<button class="btn-ghost" onclick="creditCardViewPeriod=null;render()">使用各卡目前帳期</button>' +
-      '<div class="muted" style="margin-top:8px">提醒依照「截至本期累計應繳 − 累計已還款」推算；如果已繳信用卡但沒有在這裡記錄還款，可能會誤報逾期。</div>' +
+      '<div class="muted" style="margin-top:8px">提醒依照「截至本期累計應繳 − 累計已還款」推算；查看帳期只影響上方本期應繳金額，不影響下方流水清單顯示哪些交易。如果已繳信用卡但沒有在這裡記錄還款，可能會誤報逾期。</div>' +
       '<h2 style="margin-top:14px">信用卡流水篩選</h2>' + renderListFilterBar('creditCardPayments') +
+      '<div class="muted">流水月份依交易發生的實際日期篩選，不是依帳單期別。</div>' +
       '<label>來源快速篩選</label><select id="cardLedgerSource" onchange="handleCardLedgerSourceChange()"><option value="all"' + optSelected(listFilters.creditCardPayments.source,'all') + '>全部</option><option value="personal"' + optSelected(listFilters.creditCardPayments.source,'personal') + '>個人刷卡</option><option value="family"' + optSelected(listFilters.creditCardPayments.source,'family') + '>家庭刷卡</option><option value="installment"' + optSelected(listFilters.creditCardPayments.source,'installment') + '>分期</option><option value="payment"' + optSelected(listFilters.creditCardPayments.source,'payment') + '>還款</option></select>' +
-      '<div class="detail-tools">' + renderDetailSearch('creditCardPayments', '搜尋信用卡流水', state.data.creditCards.reduce((n, card) => n + filterCreditCardLedgerEntries(card.id).length, 0), 'card:', true) + '</div>' +
+      '<div class="detail-tools">' + renderDetailSearch('creditCardPayments', '搜尋信用卡流水', Array.from(cardLedgers.values()).reduce((n, entries) => n + entries.length, 0), 'card:', true) + '</div>' +
     '</div>' +
     '<h2 class="section-title">信用卡總覽</h2>' + cardsHtml +
     '<h2 class="section-title">新增卡片</h2>' +
@@ -3236,15 +3253,18 @@ function renderDetailSearch(scope, label, matchCount, target, prefixMatch) {
 
 function handleDetailSearchInput(scope, inputId) {
   const input = document.getElementById(inputId);
-  listFilters[scope].search = input ? input.value : '';
+  if (!input) return;
+  const selectionStart = input.selectionStart;
+  const selectionEnd = input.selectionEnd;
+  listFilters[scope].search = input.value;
   render();
-  requestAnimationFrame(() => {
-    const next = document.getElementById(inputId);
-    if (!next) return;
-    next.focus();
-    const end = next.value.length;
-    if (next.setSelectionRange) next.setSelectionRange(end, end);
-  });
+  const next = document.getElementById(inputId);
+  if (!next || !next.parentNode) return;
+  next.parentNode.replaceChild(input, next);
+  input.focus();
+  if (input.setSelectionRange && selectionStart != null && selectionEnd != null) {
+    input.setSelectionRange(selectionStart, selectionEnd);
+  }
 }
 
 function clearDetailSearch(scope, inputId) {
